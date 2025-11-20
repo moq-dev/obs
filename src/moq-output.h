@@ -25,8 +25,8 @@ private:
     std::string token;
     std::string stream_name;
 
-    std::atomic<size_t> total_bytes_sent;
-    std::atomic<int> connect_time_ms;
+    size_t total_bytes_sent;
+    int connect_time_ms;
 };
 
 void register_moq_output();
