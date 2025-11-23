@@ -1,6 +1,14 @@
+#include <iostream>
+
 #include "moq-output.h"
 
 #include <obs.hpp>
+
+extern "C" {
+    extern void hang_start_from_c();
+    extern void hang_stop_from_c();
+    extern void hang_write_video_packet_from_c(void *data, size_t size, int keyframe, long dts);
+}
 
 MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	: output(output),
@@ -24,6 +32,25 @@ bool MoQOutput::Start()
 
 	if (!obs_output_initialize_encoders(output, 0))
 		return false;
+
+	const obs_encoder_t *encoder = obs_output_get_video_encoder2(output, 0);
+
+	if (!encoder)
+		return false;
+
+    // std::cout << "joy: " << obs_encoder_get_width(encoder) << std::endl;
+
+    obs_data_t *encoder_settings = obs_encoder_get_settings(encoder);
+
+    // const char *profile_str = obs_data_get_string(encoder_settings, "profile");
+
+    // std::cout << "joy: " << profile_str << std::endl;
+
+    std::cout << "json: " << obs_data_get_json_pretty(encoder_settings) << std::endl;
+
+    obs_data_release(encoder_settings);
+    
+    hang_start_from_c();
     
 	obs_output_begin_data_capture(output, 0);
 
@@ -34,6 +61,8 @@ void MoQOutput::Stop(bool signal)
 {
 	if (signal) {
 		obs_output_signal_stop(output, OBS_OUTPUT_SUCCESS);
+
+        hang_stop_from_c();
 	} 
 
 	return;
@@ -51,7 +80,7 @@ void MoQOutput::Data(struct encoder_packet *packet)
 		// TODO: Handle Audio packet
 		return;
 	} else if (packet->type == OBS_ENCODER_VIDEO) {
-		// TODO: Handle Video packet
+        hang_write_video_packet_from_c(packet->data, packet->size, packet->keyframe, packet->dts_usec);
 		return;
 	}
 }
