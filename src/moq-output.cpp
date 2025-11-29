@@ -151,7 +151,7 @@ void MoQOutput::ConfigureVideoTrack()
 	auto video_height = obs_encoder_get_height(encoder);
 
 	LOG_INFO("Video codec: %s, profile: %s, bitrate: %d, width: %d, height: %d", video_codec, profile, video_bitrate,
-		 video_height);
+		 video_width, video_height);
 	return;
 }
 
