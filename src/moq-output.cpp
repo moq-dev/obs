@@ -1,6 +1,7 @@
 #include <obs.hpp>
 
 #include "moq-output.h"
+#include "util/util_uint64.h"
 
 extern "C" {
 #include "hang.h"
@@ -11,23 +12,28 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  server_url(),
 	  path(),
 	  total_bytes_sent(0),
-	  connect_time_ms(0)
+	  connect_time_ms(0),
+	  session(-1),
+	  video(-1),
+	  audio(-1)
 {
 	LOG_INFO("MoQOutput instance created");
+
+	broadcast = hang_broadcast_create();
 }
 
 MoQOutput::~MoQOutput()
 {
 	LOG_INFO("MoQOutput instance being destroyed");
+
+	hang_broadcast_close(broadcast);
+
 	Stop();
 }
 
 bool MoQOutput::Start()
 {
 	LOG_INFO("Starting MoQ output...");
-
-	ConfigureVideoTrack();
-	ConfigureAudioTrack();
 
 	obs_service_t *service = obs_output_get_service(output);
 	if (!service) {
@@ -65,8 +71,6 @@ bool MoQOutput::Start()
 		return false;
 	}
 
-	// std::cout << "joy: " << obs_encoder_get_width(encoder) << std::endl;
-
 	obs_data_t *encoder_settings = obs_encoder_get_settings(encoder);
 	const char *profile_str = obs_data_get_string(encoder_settings, "profile");
 
@@ -75,8 +79,32 @@ bool MoQOutput::Start()
 
 	LOG_DEBUG("Encoder settings: %s", obs_data_get_json_pretty(encoder_settings));
 
-	LOG_INFO("Initializing hang library with server: %s, path: %s", server_url.c_str(), path.c_str());
-	hang_start_from_c(server_url.c_str(), path.c_str(), profile_str);
+	LOG_INFO("Connecting to MoQ server: %s", server_url.c_str());
+
+	// Create a callback to log when the session is closed
+	auto session_closed_callback = [](void *user_data, int error_code) {
+		const char *server_url = (const char *)user_data;
+		LOG_INFO("MoQ session closed: %s, error code: %d", server_url, error_code);
+	};
+
+	// Start establishing a session with the MoQ server
+	// NOTE: You could publish the same broadcasts to multiple sessions if you want (redundant ingest).
+	session = hang_session_connect(server_url.c_str(), (void*) server_url.c_str(), session_closed_callback);
+	if (session < 0) {
+		LOG_ERROR("Failed to initialize MoQ server: %d", session);
+		return false;
+	}
+
+	LOG_INFO("Publishing broadcast: %s", path.c_str());
+
+	// Publish the one broadcast to the session.
+	// NOTE: You could publish multiple broadcasts to the same session if you want (multi ingest).
+	// TODO: There is currently no unpublish function.
+	auto result = hang_session_publish(session, path.c_str(), broadcast);
+	if (result < 0) {
+		LOG_ERROR("Failed to publish broadcast to session: %d", result);
+		return false;
+	}
 
 	obs_data_release(encoder_settings);
 
@@ -90,11 +118,14 @@ void MoQOutput::Stop(bool signal)
 {
 	LOG_INFO("Stopping MoQ output (signal: %s)", signal ? "true" : "false");
 
+	// Close the session
+	hang_session_disconnect(session);
+	hang_track_close(video);
+	hang_track_close(audio);
+
 	if (signal) {
 		obs_output_signal_stop(output, OBS_OUTPUT_SUCCESS);
 
-		LOG_INFO("Stopping hang library");
-		hang_stop_from_c();
 		LOG_INFO("MoQ output stopped successfully. Total bytes sent: %zu", total_bytes_sent);
 	}
 
@@ -110,27 +141,56 @@ void MoQOutput::Data(struct encoder_packet *packet)
 		return;
 	}
 
-	if (packet->dts_usec < 0) {
-		LOG_ERROR("Received packet with negative dts, skipping");
-		return;
-	}
-
 	if (packet->type == OBS_ENCODER_AUDIO) {
-		LOG_DEBUG("Received audio packet - size: %zu, dts: %lld", packet->size, packet->dts_usec);
-		hang_write_audio_packet_from_c(packet->data, packet->size, packet->dts_usec);
-		return;
+		AudioData(packet);
 	} else if (packet->type == OBS_ENCODER_VIDEO) {
-		LOG_DEBUG("Received video packet - size: %zu, keyframe: %s, dts: %lld", packet->size,
-			  packet->keyframe ? "yes" : "no", packet->dts_usec);
-		hang_write_video_packet_from_c(packet->data, packet->size, packet->keyframe, packet->dts_usec);
-		total_bytes_sent += packet->size;
-		return;
+		VideoData(packet);
 	}
 }
 
-void MoQOutput::ConfigureVideoTrack()
+void MoQOutput::AudioData(struct encoder_packet *packet)
 {
-	obs_encoder_t *encoder = obs_output_get_video_encoder2(output, 0);
+		LOG_DEBUG("Received audio packet - size: %zu, pts: %lld", packet->size, packet->pts);
+
+		if (audio < 0) {
+			AudioInit();
+		}
+
+		auto result = hang_track_write(audio, packet->data, packet->size, packet->pts);
+		if (result < 0) {
+			LOG_ERROR("Failed to write audio packet: %d", result);
+			return;
+		}
+		total_bytes_sent += packet->size;
+	}
+
+void MoQOutput::VideoData(struct encoder_packet *packet)
+{
+		LOG_DEBUG("Received video packet - size: %zu, keyframe: %s, pts: %lld", packet->size,
+			  packet->keyframe ? "yes" : "no", packet->pts);
+
+		if (video < 0) {
+			VideoInit();
+		}
+
+		//auto pts = 1000000 * (packet->timebase_num * packet->pts) / packet->timebase_den;
+		auto pts = util_mul_div64(
+			packet->pts,
+			1000000ULL * packet->timebase_num,
+			packet->timebase_den
+		);
+
+		auto result = hang_track_write(video, packet->data, packet->size, pts);
+		if (result < 0) {
+			LOG_ERROR("Failed to write video packet: %d", result);
+			return;
+		}
+		total_bytes_sent += packet->size;
+}
+
+void MoQOutput::VideoInit()
+{
+	obs_encoder_t *encoder = obs_output_get_video_encoder(output);
 	if (!encoder) {
 		LOG_ERROR("Failed to get video encoder");
 		return;
@@ -145,17 +205,37 @@ void MoQOutput::ConfigureVideoTrack()
 	LOG_DEBUG("Video encoder settings: %s", obs_data_get_json_pretty_with_defaults(settings));
 
 	const char *video_codec = obs_encoder_get_codec(encoder);
-	const char *profile = obs_data_get_string(settings, "profile"); // Could be "" 
+	const char *profile = obs_data_get_string(settings, "profile"); // Could be ""
 	auto video_bitrate = (int)obs_data_get_int(settings, "bitrate");
 	auto video_width = obs_encoder_get_width(encoder);
 	auto video_height = obs_encoder_get_height(encoder);
 
-	LOG_INFO("Video codec: %s, profile: %s, bitrate: %d, width: %d, height: %d", video_codec, profile, video_bitrate,
-		 video_width, video_height);
-	return;
+	LOG_INFO("Video codec: %s, profile: %s, bitrate: %d, width: %d, height: %d", video_codec, profile,
+		 video_bitrate, video_width, video_height);
+
+	video = hang_track_create(broadcast, video_codec);
+	if (video < 0) {
+		LOG_ERROR("Failed to create video track: %d", video);
+		return;
+	}
+
+	uint8_t *extra_data = nullptr;
+	size_t extra_size = 0;
+
+	if (!obs_encoder_get_extra_data(encoder, &extra_data, &extra_size)) {
+		LOG_WARNING("Failed to get extra data");
+	}
+
+	auto result = hang_track_init(video, extra_data, extra_size);
+	if (result < 0) {
+		LOG_ERROR("Failed to initialize video track: %d", result);
+		return;
+	}
+
+	LOG_INFO("Video track initialized successfully: %d", video);
 }
 
-void MoQOutput::ConfigureAudioTrack()
+void MoQOutput::AudioInit()
 {
 	obs_encoder_t *encoder = obs_output_get_audio_encoder(output, 0);
 	if (!encoder) {
@@ -176,9 +256,31 @@ void MoQOutput::ConfigureAudioTrack()
 	auto audio_sample_rate = obs_encoder_get_sample_rate(encoder);
 	uint32_t audio_channels = 2;
 
+
 	LOG_INFO("Audio codec: %s, bitrate: %d, sample rate: %d, channels: %d", audio_codec, audio_bitrate,
 		 audio_sample_rate, audio_channels);
-	return;
+
+
+	audio = hang_track_create(broadcast, audio_codec);
+	if (audio < 0) {
+		LOG_ERROR("Failed to create audio track: %d", audio);
+		return;
+	}
+
+	uint8_t *extra_data = nullptr;
+	size_t extra_size = 0;
+
+	if (!obs_encoder_get_extra_data(encoder, &extra_data, &extra_size)) {
+		LOG_WARNING("Failed to get extra data");
+	}
+
+	auto result = hang_track_init(audio, extra_data, extra_size);
+	if (result < 0) {
+		LOG_ERROR("Failed to initialize audio track: %d", result);
+		return;
+	}
+
+	LOG_INFO("Audio track initialized successfully: %d", audio);
 }
 
 void register_moq_output()

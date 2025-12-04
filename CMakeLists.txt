@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28...3.30)
+cmake_minimum_required(VERSION 3.28)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 
@@ -16,7 +16,7 @@ add_library(${CMAKE_PROJECT_NAME} MODULE)
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
-option(MOQ_LOCAL "Path to local moq repo for development" "")
+option(MOQ_LOCAL "Path to moq repo for local development" "")
 
 if(MOQ_LOCAL)
     add_subdirectory(${MOQ_LOCAL}/rs/hang-c hang)
