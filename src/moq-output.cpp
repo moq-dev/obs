@@ -64,34 +64,28 @@ bool MoQOutput::Start()
 
 	LOG_INFO("Connecting to MoQ server: %s", server_url.c_str());
 
+	connect_start = std::chrono::steady_clock::now();
+
+	// Create a callback to log when the session is connected or closed
+	auto session_connect_callback = [](void *user_data, int error_code) {
+		auto self = static_cast<MoQOutput*>(user_data);
+
+		if (error_code == 0) {
+			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
+			self->connect_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms, self->server_url.c_str());
+		} else {
+			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
+		}
+	};
+
 	// Start establishing a session with the MoQ server
 	// NOTE: You could publish the same broadcasts to multiple sessions if you want (redundant ingest).
-	connect_start = std::chrono::steady_clock::now();
-	session = hang_session_connect(server_url.c_str());
+	session = hang_session_connect(server_url.c_str(), session_connect_callback, this);
 	if (session < 0) {
 		LOG_ERROR("Failed to initialize MoQ server: %d", session);
 		return false;
 	}
-
-	// Create a callback to log when the session is connected
-	auto session_connected_callback = [](void *user_data, int error_code) {
-		auto self = static_cast<MoQOutput*>(user_data);
-		auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
-		self->connect_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-		LOG_INFO("MoQ session connected in %d ms, error code: %d", self->connect_time_ms, error_code);
-	};
-	hang_session_on_connect(session, session_connected_callback, this);
-
-	// Create a callback to log when the session is closed
-	auto session_closed_callback = [](void *user_data, int error_code) {
-		const char *server_url = (const char *)user_data;
-		LOG_INFO("MoQ session closed: %s, error code: %d", server_url, error_code);
-	};
-	hang_session_on_close(
-		session,
-		session_closed_callback,
-		(void*) server_url.c_str()
-	);
 
 	LOG_INFO("Publishing broadcast: %s", path.c_str());
 
