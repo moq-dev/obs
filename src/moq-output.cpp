@@ -4,7 +4,7 @@
 #include "util/util_uint64.h"
 
 extern "C" {
-#include "hang.h"
+#include "moq.h"
 }
 
 MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
@@ -16,13 +16,13 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  session(-1),
 	  video(-1),
 	  audio(-1),
-	  broadcast(hang_broadcast_create())
+	  broadcast(moq_broadcast_create())
 {
 }
 
 MoQOutput::~MoQOutput()
 {
-	hang_broadcast_close(broadcast);
+	moq_broadcast_close(broadcast);
 
 	Stop();
 }
@@ -81,7 +81,7 @@ bool MoQOutput::Start()
 
 	// Start establishing a session with the MoQ server
 	// NOTE: You could publish the same broadcasts to multiple sessions if you want (redundant ingest).
-	session = hang_session_connect(server_url.c_str(), session_connect_callback, this);
+	session = moq_session_connect(server_url.c_str(), session_connect_callback, this);
 	if (session < 0) {
 		LOG_ERROR("Failed to initialize MoQ server: %d", session);
 		return false;
@@ -92,7 +92,7 @@ bool MoQOutput::Start()
 	// Publish the one broadcast to the session.
 	// NOTE: You could publish multiple broadcasts to the same session if you want (multi ingest).
 	// TODO: There is currently no unpublish function.
-	auto result = hang_broadcast_publish(broadcast, session, path.c_str());
+	auto result = moq_broadcast_publish(broadcast, session, path.c_str());
 	if (result < 0) {
 		LOG_ERROR("Failed to publish broadcast to session: %d", result);
 		return false;
@@ -106,9 +106,9 @@ bool MoQOutput::Start()
 void MoQOutput::Stop(bool signal)
 {
 	// Close the session
-	hang_session_close(session);
-	hang_track_close(video);
-	hang_track_close(audio);
+	moq_session_close(session);
+	moq_track_close(video);
+	moq_track_close(audio);
 
 	if (signal) {
 		obs_output_signal_stop(output, OBS_OUTPUT_SUCCESS);
@@ -138,7 +138,7 @@ void MoQOutput::AudioData(struct encoder_packet *packet)
 		AudioInit();
 	}
 
-	auto result = hang_track_write(audio, packet->data, packet->size, packet->pts);
+	auto result = moq_track_write(audio, packet->data, packet->size, packet->pts);
 	if (result < 0) {
 		return;
 	}
@@ -158,7 +158,7 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 		packet->timebase_den
 	);
 
-	auto result = hang_track_write(video, packet->data, packet->size, pts);
+	auto result = moq_track_write(video, packet->data, packet->size, pts);
 	if (result < 0) {
 		LOG_ERROR("Failed to write video packet: %d", result);
 		return;
@@ -187,12 +187,6 @@ void MoQOutput::VideoInit()
 	auto video_height = obs_encoder_get_height(encoder);
 	*/
 
-	const char *codec = obs_encoder_get_codec(encoder);
-	video = hang_track_create(broadcast, codec);
-	if (video < 0) {
-		LOG_ERROR("Failed to create video track: %d", video);
-		return;
-	}
 
 	uint8_t *extra_data = nullptr;
 	size_t extra_size = 0;
@@ -203,11 +197,14 @@ void MoQOutput::VideoInit()
 		LOG_WARNING("Failed to get extra data");
 	}
 
-	auto result = hang_track_init(video, extra_data, extra_size);
-	if (result < 0) {
-		LOG_ERROR("Failed to initialize video track: %d", result);
+	const char *codec = obs_encoder_get_codec(encoder);
+	video = moq_track_create(broadcast, codec, extra_data, extra_size);
+	if (video < 0) {
+		LOG_ERROR("Failed to initialize video track: %d", video);
 		return;
 	}
+
+	LOG_INFO("Video track initialized successfully");
 }
 
 void MoQOutput::AudioInit()
@@ -229,13 +226,6 @@ void MoQOutput::AudioInit()
 	auto audio_bitrate = (int)obs_data_get_int(settings, "bitrate");
 	*/
 
-	const char *codec = obs_encoder_get_codec(encoder);
-	audio = hang_track_create(broadcast, codec);
-	if (audio < 0) {
-		LOG_ERROR("Failed to create audio track: %d", audio);
-		return;
-	}
-
 	uint8_t *extra_data = nullptr;
 	size_t extra_size = 0;
 
@@ -245,13 +235,14 @@ void MoQOutput::AudioInit()
 		LOG_WARNING("Failed to get extra data");
 	}
 
-	auto result = hang_track_init(audio, extra_data, extra_size);
-	if (result < 0) {
-		LOG_ERROR("Failed to initialize audio track: %d", result);
+	const char *codec = obs_encoder_get_codec(encoder);
+	audio = moq_track_create(broadcast, codec, extra_data, extra_size);
+	if (audio < 0) {
+		LOG_ERROR("Failed to initialize audio track: %d", audio);
 		return;
 	}
 
-	LOG_INFO("Audio track initialized successfully: %d", audio);
+	LOG_INFO("Audio track initialized successfully");
 }
 
 void register_moq_output()

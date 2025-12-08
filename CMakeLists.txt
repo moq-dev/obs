@@ -19,25 +19,25 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 option(MOQ_LOCAL "Path to moq repo for local development" "")
 
 if(MOQ_LOCAL)
-    add_subdirectory(${MOQ_LOCAL}/rs/hang-c hang)
+    add_subdirectory(${MOQ_LOCAL}/rs/libmoq moq)
 else()
     include(FetchContent)
-    FetchContent_Declare(hang
-        URL https://github.com/kixelated/moq/releases/download/v${HANG_VERSION}/hang-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}.tar.gz
+    FetchContent_Declare(moq
+        URL https://github.com/kixelated/moq/releases/download/v${MOQ_VERSION}/moq-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}.tar.gz
     )
-    FetchContent_MakeAvailable(hang)
+    FetchContent_MakeAvailable(moq)
 
-    add_library(hang SHARED IMPORTED GLOBAL)
-    set_target_properties(hang PROPERTIES
-        IMPORTED_LOCATION "${hang_SOURCE_DIR}/lib/libhang.dylib"
-        INTERFACE_INCLUDE_DIRECTORIES "${hang_SOURCE_DIR}/include"
+    add_library(moq SHARED IMPORTED GLOBAL)
+    set_target_properties(moq PROPERTIES
+        IMPORTED_LOCATION "${moq_SOURCE_DIR}/lib/libmoq.dylib"
+        INTERFACE_INCLUDE_DIRECTORIES "${moq_SOURCE_DIR}/include"
     )
 endif()
 
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE hang)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE moq)
 
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:hang>
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:moq>
             $<TARGET_BUNDLE_CONTENT_DIR:${CMAKE_PROJECT_NAME}>/MacOS/
 )
 

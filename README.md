@@ -17,7 +17,7 @@ Prerequisites:
 *   CMake 3.20+
 *   C++ Compiler (Clang/GCC/MSVC)
 *   OBS Studio development libraries (libobs)
-*   MoQ implementation from [kixelated/moq](https://github.com/kixelated/moq) (required for building the `hang` library)
+*   MoQ implementation from [kixelated/moq](https://github.com/kixelated/moq) (required for building the `moq` library)
 *   Fork of OBS-Studio from [brianmed/obs-studio](https://github.com/brianmed/obs-studio) to enable the MoQ service in the OBS Studio UI.
 
 1.  Clone the repository:

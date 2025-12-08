@@ -22,7 +22,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "moq-service.h"
 
 extern "C" {
-#include "hang.h"
+#include "moq.h"
 }
 
 OBS_DECLARE_MODULE()
@@ -35,7 +35,7 @@ MODULE_EXPORT const char *obs_module_description(void)
 bool obs_module_load(void)
 {
 	// Use RUST_LOG env var for more verbose output
-	hang_log_level("info");
+	moq_log_level("info");
 
 	register_moq_output();
 	register_moq_service();
