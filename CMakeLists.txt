@@ -20,25 +20,18 @@ option(MOQ_LOCAL "Path to moq repo for local development" "")
 
 if(MOQ_LOCAL)
   add_subdirectory(${MOQ_LOCAL}/rs/libmoq moq)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE moq)
 else()
   include(FetchContent)
   FetchContent_Declare(
     moq
-    URL
-      https://github.com/kixelated/moq/releases/download/v${MOQ_VERSION}/moq-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}.tar.gz
+    URL https://github.com/moq-dev/moq/releases/download/libmoq-v${MOQ_VERSION}/moq-${MOQ_VERSION}-${MOQ_TARGET}.${MOQ_ARCHIVE}
   )
   FetchContent_MakeAvailable(moq)
 
-  add_library(moq SHARED IMPORTED GLOBAL)
-  set_target_properties(
-    moq
-    PROPERTIES
-      IMPORTED_LOCATION "${moq_SOURCE_DIR}/lib/libmoq.dylib"
-      INTERFACE_INCLUDE_DIRECTORIES "${moq_SOURCE_DIR}/include"
-  )
+  find_package(moq REQUIRED PATHS ${moq_SOURCE_DIR} NO_DEFAULT_PATH)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE moq::moq)
 endif()
-
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE moq)
 
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
