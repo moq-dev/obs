@@ -1,6 +1,6 @@
 /*
-Plugin Name
-Copyright (C) <Year> <Developer> <Email Address>
+NVDEC Hardware Video Decoder for OBS Hang Source
+Copyright (C) 2024 OBS Plugin Template
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -16,31 +16,15 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
 #include <obs-module.h>
 
-#include "moq-output.h"
-#include "moq-service.h"
-#include "hang-source.h"
+struct hang_source;
 
-extern "C" {
-#include "moq.h"
-}
-
-OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE("obs-moq", "en-US")
-MODULE_EXPORT const char *obs_module_description(void)
-{
-	return "OBS MoQ (Media over QUIC) module";
-}
-
-bool obs_module_load(void)
-{
-	// Use RUST_LOG env var for more verbose output
-	moq_log_level("info", 4);
-
-	register_moq_output();
-	register_moq_service();
-	obs_register_source(&hang_source_info);
-
-	return true;
-}
+// NVDEC decoder functions
+bool nvdec_decoder_init(struct hang_source *context);
+void nvdec_decoder_destroy(struct hang_source *context);
+bool nvdec_decoder_decode(struct hang_source *context, const uint8_t *data, size_t size, uint64_t pts, bool keyframe);

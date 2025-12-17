@@ -40,10 +40,11 @@ class MoQOutput
     int connect_time_ms;
     std::chrono::steady_clock::time_point connect_start;
 
-    int session;
-    int broadcast;
-    int video;
-    int audio;
+    int32_t origin;
+    int32_t session;
+    int32_t broadcast;
+    int32_t video;
+    int32_t audio;
 };
 
 void register_moq_output();

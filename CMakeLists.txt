@@ -58,9 +58,30 @@ if(ENABLE_QT)
   )
 endif()
 
+# FFmpeg dependency
+include(FindPkgConfig)
+pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libswscale libswresample)
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${FFMPEG_INCLUDE_DIRS})
+target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE ${FFMPEG_LIBRARY_DIRS})
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${FFMPEG_LIBRARIES})
+
+# NVDEC/CUDA support (Linux/Windows only, not macOS)
+if(NOT APPLE)
+  find_library(CUDA_LIBRARY cuda PATHS /usr/local/cuda/lib64 /usr/local/cuda/lib)
+  if(CUDA_LIBRARY OR EXISTS "/usr/local/cuda/include/cuda.h")
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_NVDEC=1)
+    message(STATUS "NVDEC/CUDA support enabled")
+  else()
+    message(STATUS "NVDEC/CUDA support disabled (CUDA not found)")
+  endif()
+else()
+  message(STATUS "NVDEC/CUDA support disabled (not available on macOS)")
+endif()
+
 target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE src/obs-moq.cpp src/moq-output.h src/moq-service.h src/moq-output.cpp src/moq-service.cpp
+          src/hang-source.c src/hang-source.h src/nvdec-decoder.c src/nvdec-decoder.h src/audio-decoder.c src/audio-decoder.h
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
