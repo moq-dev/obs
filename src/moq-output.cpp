@@ -13,16 +13,17 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  path(),
 	  total_bytes_sent(0),
 	  connect_time_ms(0),
+	  origin(0),
 	  session(0),
+	  broadcast(moq_publish_create()),
 	  video(0),
-	  audio(0),
-	  broadcast(moq_broadcast_create())
+	  audio(0)
 {
 }
 
 MoQOutput::~MoQOutput()
 {
-	moq_broadcast_close(broadcast);
+	moq_publish_close(broadcast);
 
 	Stop();
 }
@@ -80,22 +81,28 @@ bool MoQOutput::Start()
 		}
 	};
 
-	// Start establishing a session with the MoQ server
-	// NOTE: You could publish the same broadcasts to multiple sessions if you want (redundant ingest).
-	session = moq_session_connect(server_url.c_str(), session_connect_callback, this);
-	if (session < 0) {
-		LOG_ERROR("Failed to initialize MoQ server: %d", session);
+	// Create an origin for publishing
+	origin = moq_origin_create();
+	if (origin < 0) {
+		LOG_ERROR("Failed to create origin: %d", origin);
 		return false;
 	}
 
 	LOG_INFO("Publishing broadcast: %s", path.c_str());
 
-	// Publish the one broadcast to the session.
-	// NOTE: You could publish multiple broadcasts to the same session if you want (multi ingest).
-	// TODO: There is currently no unpublish function.
-	auto result = moq_broadcast_publish(broadcast, session, path.c_str());
+	// Publish the broadcast to the origin before connecting
+	// NOTE: You could publish multiple broadcasts to the same origin if you want (multi ingest).
+	auto result = moq_origin_publish(origin, path.c_str(), path.length(), broadcast);
 	if (result < 0) {
-		LOG_ERROR("Failed to publish broadcast to session: %d", result);
+		LOG_ERROR("Failed to publish broadcast to origin: %d", result);
+		return false;
+	}
+
+	// Start establishing a session with the MoQ server
+	// NOTE: You could publish the same broadcasts to multiple sessions if you want (redundant ingest).
+	session = moq_session_connect(server_url.c_str(), server_url.length(), origin, 0, session_connect_callback, this);
+	if (session < 0) {
+		LOG_ERROR("Failed to initialize MoQ server: %d", session);
 		return false;
 	}
 
@@ -106,17 +113,27 @@ bool MoQOutput::Start()
 
 void MoQOutput::Stop(bool signal)
 {
-	// Close the session
-	if (session > 0) {
-		moq_session_close(session);
-	}
-
+	// Close media tracks
 	if (video > 0) {
-		moq_track_close(video);
+		moq_publish_media_close(video);
+		video = 0;
 	}
 
 	if (audio > 0) {
-		moq_track_close(audio);
+		moq_publish_media_close(audio);
+		audio = 0;
+	}
+
+	// Close the session
+	if (session > 0) {
+		moq_session_close(session);
+		session = 0;
+	}
+
+	// Close the origin
+	if (origin > 0) {
+		moq_origin_close(origin);
+		origin = 0;
 	}
 
 	if (signal) {
@@ -154,7 +171,7 @@ void MoQOutput::AudioData(struct encoder_packet *packet)
 
 	auto pts = util_mul_div64(packet->pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
 
-	auto result = moq_track_write(audio, packet->data, packet->size, pts);
+	auto result = moq_publish_media_frame(audio, packet->data, packet->size, pts);
 	if (result < 0) {
 		LOG_ERROR("Failed to write audio frame: %d", result);
 		return;
@@ -175,7 +192,7 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 
 	auto pts = util_mul_div64(packet->pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
 
-	auto result = moq_track_write(video, packet->data, packet->size, pts);
+	auto result = moq_publish_media_frame(video, packet->data, packet->size, pts);
 	if (result < 0) {
 		LOG_ERROR("Failed to write video frame: %d", result);
 		return;
@@ -215,7 +232,7 @@ void MoQOutput::VideoInit()
 	}
 
 	const char *codec = obs_encoder_get_codec(encoder);
-	video = moq_track_create(broadcast, codec, extra_data, extra_size);
+	video = moq_publish_media_init(broadcast, codec, strlen(codec), extra_data, extra_size);
 	if (video < 0) {
 		LOG_ERROR("Failed to initialize video track: %d", video);
 		return;
@@ -253,7 +270,7 @@ void MoQOutput::AudioInit()
 	}
 
 	const char *codec = obs_encoder_get_codec(encoder);
-	audio = moq_track_create(broadcast, codec, extra_data, extra_size);
+	audio = moq_publish_media_init(broadcast, codec, strlen(codec), extra_data, extra_size);
 	if (audio < 0) {
 		LOG_ERROR("Failed to initialize audio track: %d", audio);
 		return;
