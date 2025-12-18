@@ -9,6 +9,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 #include "moq.h"
 }
@@ -16,8 +17,47 @@ extern "C" {
 #include "hang-source.h"
 #include "logger.h"
 
-#define FRAME_WIDTH 1920
-#define FRAME_HEIGHT 1080
+// Map codec string from moq_video_config to FFmpeg codec ID
+static AVCodecID codec_string_to_id(const char *codec, size_t len)
+{
+	if (!codec || len == 0) {
+		return AV_CODEC_ID_NONE;
+	}
+
+	// H.264/AVC
+	if ((len >= 4 && strncasecmp(codec, "h264", 4) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "avc1", 4) == 0) ||
+	    (len >= 3 && strncasecmp(codec, "avc", 3) == 0)) {
+		return AV_CODEC_ID_H264;
+	}
+
+	// HEVC/H.265
+	if ((len >= 4 && strncasecmp(codec, "hevc", 4) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "h265", 4) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "hev1", 4) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "hvc1", 4) == 0)) {
+		return AV_CODEC_ID_HEVC;
+	}
+
+	// VP9
+	if ((len >= 3 && strncasecmp(codec, "vp9", 3) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "vp09", 4) == 0)) {
+		return AV_CODEC_ID_VP9;
+	}
+
+	// AV1
+	if ((len >= 3 && strncasecmp(codec, "av1", 3) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "av01", 4) == 0)) {
+		return AV_CODEC_ID_AV1;
+	}
+
+	// VP8
+	if (len >= 3 && strncasecmp(codec, "vp8", 3) == 0) {
+		return AV_CODEC_ID_VP8;
+	}
+
+	return AV_CODEC_ID_NONE;
+}
 
 struct hang_source {
 	obs_source_t *source;
@@ -46,6 +86,8 @@ struct hang_source {
 
 	// Decoder state
 	AVCodecContext *codec_ctx;
+	AVCodecID current_codec_id;            // Currently configured codec
+	enum AVPixelFormat current_pix_fmt;    // Current pixel format for sws_ctx
 	struct SwsContext *sws_ctx;
 	bool got_keyframe;
 	uint32_t frames_waiting_for_keyframe;  // Count of skipped frames while waiting
@@ -107,6 +149,8 @@ static void *hang_source_create(obs_data_t *settings, obs_source_t *source)
 
 	// Initialize decoder state
 	ctx->codec_ctx = NULL;
+	ctx->current_codec_id = AV_CODEC_ID_NONE;
+	ctx->current_pix_fmt = AV_PIX_FMT_NONE;
 	ctx->sws_ctx = NULL;
 	ctx->got_keyframe = false;
 	ctx->frames_waiting_for_keyframe = 0;
@@ -116,11 +160,11 @@ static void *hang_source_create(obs_data_t *settings, obs_source_t *source)
 	// Initialize threading
 	pthread_mutex_init(&ctx->mutex, NULL);
 
-	// Initialize OBS frame structure
-	ctx->frame.width = FRAME_WIDTH;
-	ctx->frame.height = FRAME_HEIGHT;
+	// Initialize OBS frame structure - dimensions will be set dynamically from stream
+	ctx->frame.width = 0;
+	ctx->frame.height = 0;
 	ctx->frame.format = VIDEO_FORMAT_RGBA;
-	ctx->frame.linesize[0] = FRAME_WIDTH * 4;
+	ctx->frame.linesize[0] = 0;
 
 	hang_source_update(ctx, settings);
 
@@ -647,10 +691,23 @@ static void hang_source_blank_video(struct hang_source *ctx)
 
 static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_video_config *config)
 {
-	// Find H.264 decoder (can be done outside mutex)
-	const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+	// Map codec string to FFmpeg codec ID dynamically
+	AVCodecID codec_id = codec_string_to_id(config->codec, config->codec_len);
+	if (codec_id == AV_CODEC_ID_NONE) {
+		// Log the codec string for debugging (may not be null-terminated)
+		char codec_str[64] = {0};
+		size_t copy_len = config->codec_len < sizeof(codec_str) - 1 ? config->codec_len : sizeof(codec_str) - 1;
+		if (config->codec && copy_len > 0) {
+			memcpy(codec_str, config->codec, copy_len);
+		}
+		LOG_ERROR("Unknown or unsupported codec: '%s'", codec_str);
+		return false;
+	}
+
+	// Find decoder for the codec
+	const AVCodec *codec = avcodec_find_decoder(codec_id);
 	if (!codec) {
-		LOG_ERROR("H.264 codec not found");
+		LOG_ERROR("Decoder not found for codec ID: %d", codec_id);
 		return false;
 	}
 
@@ -661,10 +718,10 @@ static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_v
 		return false;
 	}
 
-	uint32_t width = FRAME_WIDTH;
-	uint32_t height = FRAME_HEIGHT;
+	// Get dimensions from config - required for buffer allocation
+	uint32_t width = 0;
+	uint32_t height = 0;
 
-	// Set codec parameters from config
 	if (config->coded_width && *config->coded_width > 0) {
 		new_codec_ctx->width = *config->coded_width;
 		width = *config->coded_width;
@@ -674,7 +731,7 @@ static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_v
 		height = *config->coded_height;
 	}
 
-	// Use codec description as extradata (contains SPS/PPS)
+	// Use codec description as extradata (contains SPS/PPS for H.264, VPS/SPS/PPS for HEVC, etc.)
 	if (config->description && config->description_len > 0) {
 		new_codec_ctx->extradata = (uint8_t *)av_mallocz(config->description_len + AV_INPUT_BUFFER_PADDING_SIZE);
 		if (new_codec_ctx->extradata) {
@@ -690,27 +747,13 @@ static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_v
 		return false;
 	}
 
-	// Allocate frame buffer (RGBA for OBS)
-	size_t buffer_size = width * height * 4;
-	uint8_t *new_frame_buffer = (uint8_t *)bmalloc(buffer_size);
-	if (!new_frame_buffer) {
-		LOG_ERROR("Failed to allocate frame buffer");
-		avcodec_free_context(&new_codec_ctx);
-		return false;
+	// If dimensions weren't in config, try to get them from the opened codec context
+	// (may have been parsed from extradata)
+	if (width == 0 && new_codec_ctx->width > 0) {
+		width = new_codec_ctx->width;
 	}
-
-	// Create scaling context for YUV420P -> RGBA conversion
-	struct SwsContext *new_sws_ctx = sws_getContext(
-		width, height, AV_PIX_FMT_YUV420P,
-		width, height, AV_PIX_FMT_RGBA,
-		SWS_BILINEAR, NULL, NULL, NULL
-	);
-
-	if (!new_sws_ctx) {
-		LOG_ERROR("Failed to create scaling context");
-		bfree(new_frame_buffer);
-		avcodec_free_context(&new_codec_ctx);
-		return false;
+	if (height == 0 && new_codec_ctx->height > 0) {
+		height = new_codec_ctx->height;
 	}
 
 	// Now take the mutex and swap in the new decoder state
@@ -728,13 +771,17 @@ static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_v
 	}
 
 	// Install new decoder state
+	// Note: sws_ctx, frame_buffer, and frame dimensions will be initialized
+	// dynamically on first decoded frame when we know the actual pixel format
 	ctx->codec_ctx = new_codec_ctx;
-	ctx->sws_ctx = new_sws_ctx;
-	ctx->frame_buffer = new_frame_buffer;
+	ctx->current_codec_id = codec_id;
+	ctx->current_pix_fmt = AV_PIX_FMT_NONE;  // Will be set on first frame
+	ctx->sws_ctx = NULL;  // Will be created on first frame with actual pixel format
+	ctx->frame_buffer = NULL;  // Will be allocated on first frame with actual dimensions
 	ctx->frame.width = width;
 	ctx->frame.height = height;
 	ctx->frame.linesize[0] = width * 4;
-	ctx->frame.data[0] = new_frame_buffer;
+	ctx->frame.data[0] = NULL;
 	ctx->frame.format = VIDEO_FORMAT_RGBA;
 	ctx->frame.timestamp = 0;
 	ctx->got_keyframe = false;
@@ -743,7 +790,14 @@ static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_v
 
 	pthread_mutex_unlock(&ctx->mutex);
 
-	LOG_INFO("Decoder initialized: %dx%d", width, height);
+	// Log codec name for debugging
+	char codec_str[64] = {0};
+	size_t copy_len = config->codec_len < sizeof(codec_str) - 1 ? config->codec_len : sizeof(codec_str) - 1;
+	if (config->codec && copy_len > 0) {
+		memcpy(codec_str, config->codec, copy_len);
+	}
+	LOG_INFO("Decoder initialized: codec=%s, dimensions=%ux%u (may be refined on first frame)", 
+	         codec_str, width, height);
 	return true;
 }
 
@@ -765,6 +819,10 @@ static void hang_source_destroy_decoder_locked(struct hang_source *ctx)
 		ctx->frame_buffer = NULL;
 		ctx->frame.data[0] = NULL;
 	}
+
+	// Reset dynamic format tracking
+	ctx->current_codec_id = AV_CODEC_ID_NONE;
+	ctx->current_pix_fmt = AV_PIX_FMT_NONE;
 }
 
 static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
@@ -779,7 +837,8 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 	}
 
 	// Check if decoder is still valid (may have been destroyed during reconnect)
-	if (!ctx->codec_ctx || !ctx->sws_ctx || !ctx->frame_buffer) {
+	// Note: sws_ctx and frame_buffer may be NULL on first frame - they're created dynamically
+	if (!ctx->codec_ctx) {
 		pthread_mutex_unlock(&ctx->mutex);
 		moq_consume_frame_close(frame_id);
 		return;
@@ -895,16 +954,36 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 	// Successfully decoded a frame - reset error counter
 	ctx->consecutive_decode_errors = 0;
 
-	// Validate decoded frame dimensions against ctx->frame and reinitialize if they differ
-	// This prevents OOB reads/writes when the stream resolution changes mid-stream
-	if (frame->width != (int)ctx->frame.width || frame->height != (int)ctx->frame.height) {
-		LOG_INFO("Decoded frame dimensions changed: %dx%d -> %dx%d, reinitializing scaler",
-		         ctx->frame.width, ctx->frame.height, frame->width, frame->height);
+	// Check if we need to (re)initialize the scaler - either first frame, dimension change, or pixel format change
+	enum AVPixelFormat decoded_pix_fmt = (enum AVPixelFormat)frame->format;
+	bool dimensions_changed = (frame->width != (int)ctx->frame.width || frame->height != (int)ctx->frame.height);
+	bool pix_fmt_changed = (decoded_pix_fmt != ctx->current_pix_fmt);
+	bool need_reinit = (!ctx->sws_ctx || !ctx->frame_buffer || dimensions_changed || pix_fmt_changed);
+
+	if (need_reinit) {
+		if (dimensions_changed) {
+			LOG_INFO("Decoded frame dimensions changed: %ux%u -> %dx%d",
+			         ctx->frame.width, ctx->frame.height, frame->width, frame->height);
+		}
+		if (pix_fmt_changed) {
+			LOG_INFO("Decoded frame pixel format changed: %d -> %d (%s)",
+			         ctx->current_pix_fmt, decoded_pix_fmt, 
+			         av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
+		}
 
 		// Validate that dimensions are positive and reasonable
 		if (frame->width <= 0 || frame->height <= 0 ||
 		    frame->width > 16384 || frame->height > 16384) {
 			LOG_ERROR("Invalid decoded frame dimensions: %dx%d", frame->width, frame->height);
+			av_frame_free(&frame);
+			pthread_mutex_unlock(&ctx->mutex);
+			moq_consume_frame_close(frame_id);
+			return;
+		}
+
+		// Validate pixel format is supported by swscale
+		if (decoded_pix_fmt == AV_PIX_FMT_NONE) {
+			LOG_ERROR("Invalid decoded frame pixel format: %d", decoded_pix_fmt);
 			av_frame_free(&frame);
 			pthread_mutex_unlock(&ctx->mutex);
 			moq_consume_frame_close(frame_id);
@@ -917,14 +996,16 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 			ctx->sws_ctx = NULL;
 		}
 
-		// Create new scaling context with the new dimensions
+		// Create new scaling context with the actual pixel format from the decoded frame
 		struct SwsContext *new_sws_ctx = sws_getContext(
-			frame->width, frame->height, AV_PIX_FMT_YUV420P,
+			frame->width, frame->height, decoded_pix_fmt,
 			frame->width, frame->height, AV_PIX_FMT_RGBA,
 			SWS_BILINEAR, NULL, NULL, NULL
 		);
 		if (!new_sws_ctx) {
-			LOG_ERROR("Failed to create scaling context for %dx%d", frame->width, frame->height);
+			LOG_ERROR("Failed to create scaling context for %dx%d pix_fmt=%d (%s)", 
+			          frame->width, frame->height, decoded_pix_fmt,
+			          av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
 			av_frame_free(&frame);
 			pthread_mutex_unlock(&ctx->mutex);
 			moq_consume_frame_close(frame_id);
@@ -951,13 +1032,16 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 
 		// Install new state
 		ctx->sws_ctx = new_sws_ctx;
+		ctx->current_pix_fmt = decoded_pix_fmt;
 		ctx->frame_buffer = new_frame_buffer;
 		ctx->frame.width = frame->width;
 		ctx->frame.height = frame->height;
 		ctx->frame.linesize[0] = frame->width * 4;
 		ctx->frame.data[0] = new_frame_buffer;
 
-		LOG_INFO("Scaler reinitialized for %dx%d", frame->width, frame->height);
+		LOG_INFO("Scaler initialized for %dx%d pix_fmt=%s", 
+		         frame->width, frame->height,
+		         av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
 	}
 
 	// Convert YUV420P to RGBA
