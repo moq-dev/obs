@@ -110,14 +110,17 @@ void MoQOutput::Stop(bool signal)
 	// Close the session
 	if (session > 0) {
 		moq_session_close(session);
+		session = 0;
 	}
 
 	if (video > 0) {
 		moq_publish_media_close(video);
+		video = 0;
 	}
 
 	if (audio > 0) {
 		moq_publish_media_close(audio);
+		audio = 0;
 	}
 
 	if (signal) {
