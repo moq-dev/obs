@@ -14,7 +14,7 @@ extern "C" {
 #include "moq.h"
 }
 
-#include "hang-source.h"
+#include "moq-source.h"
 #include "logger.h"
 
 // Map codec string from moq_video_config to FFmpeg codec ID
@@ -59,7 +59,7 @@ static AVCodecID codec_string_to_id(const char *codec, size_t len)
 	return AV_CODEC_ID_NONE;
 }
 
-struct hang_source {
+struct moq_source {
 	obs_source_t *source;
 
 	// Settings - current active connection settings
@@ -96,10 +96,10 @@ struct hang_source {
 };
 
 // Forward declarations
-static void hang_source_update(void *data, obs_data_t *settings);
-static void hang_source_destroy(void *data);
-static obs_properties_t *hang_source_properties(void *data);
-static void hang_source_get_defaults(obs_data_t *settings);
+static void moq_source_update(void *data, obs_data_t *settings);
+static void moq_source_destroy(void *data);
+static obs_properties_t *moq_source_properties(void *data);
+static void moq_source_get_defaults(obs_data_t *settings);
 
 // MoQ callbacks
 static void on_session_status(void *user_data, int32_t code);
@@ -107,16 +107,16 @@ static void on_catalog(void *user_data, int32_t catalog);
 static void on_video_frame(void *user_data, int32_t frame_id);
 
 // Helper functions
-static void hang_source_reconnect(struct hang_source *ctx);
-static void hang_source_disconnect_locked(struct hang_source *ctx);
-static void hang_source_blank_video(struct hang_source *ctx);
-static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_video_config *config);
-static void hang_source_destroy_decoder_locked(struct hang_source *ctx);
-static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id);
+static void moq_source_reconnect(struct moq_source *ctx);
+static void moq_source_disconnect_locked(struct moq_source *ctx);
+static void moq_source_blank_video(struct moq_source *ctx);
+static bool moq_source_init_decoder(struct moq_source *ctx, const struct moq_video_config *config);
+static void moq_source_destroy_decoder_locked(struct moq_source *ctx);
+static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id);
 
-static void *hang_source_create(obs_data_t *settings, obs_source_t *source)
+static void *moq_source_create(obs_data_t *settings, obs_source_t *source)
 {
-	struct hang_source *ctx = (struct hang_source *)bzalloc(sizeof(struct hang_source));
+	struct moq_source *ctx = (struct moq_source *)bzalloc(sizeof(struct moq_source));
 	ctx->source = source;
 
 	// Initialize shutdown flag
@@ -151,20 +151,20 @@ static void *hang_source_create(obs_data_t *settings, obs_source_t *source)
 	ctx->frame.linesize[0] = 0;
 
 	// Load settings from OBS - this will auto-connect if settings are valid
-	// (hang_source_update detects settings changed from NULL and reconnects)
-	hang_source_update(ctx, settings);
+	// (moq_source_update detects settings changed from NULL and reconnects)
+	moq_source_update(ctx, settings);
 
 	return ctx;
 }
 
-static void hang_source_destroy(void *data)
+static void moq_source_destroy(void *data)
 {
-	struct hang_source *ctx = (struct hang_source *)data;
+	struct moq_source *ctx = (struct moq_source *)data;
 
 	// Set shutdown flag first - callbacks will check this and exit early
 	pthread_mutex_lock(&ctx->mutex);
 	ctx->shutting_down = true;
-	hang_source_disconnect_locked(ctx);
+	moq_source_disconnect_locked(ctx);
 	pthread_mutex_unlock(&ctx->mutex);
 
 	// Give MoQ callbacks time to drain - they check shutting_down and exit early.
@@ -185,16 +185,16 @@ static void hang_source_destroy(void *data)
 
 	bfree(ctx->url);
 	bfree(ctx->broadcast);
-	// Note: frame_buffer is already freed by hang_source_disconnect_locked
+	// Note: frame_buffer is already freed by moq_source_disconnect_locked
 
 	pthread_mutex_destroy(&ctx->mutex);
 
 	bfree(ctx);
 }
 
-static void hang_source_update(void *data, obs_data_t *settings)
+static void moq_source_update(void *data, obs_data_t *settings)
 {
-	struct hang_source *ctx = (struct hang_source *)data;
+	struct moq_source *ctx = (struct moq_source *)data;
 
 	const char *url = obs_data_get_string(settings, "url");
 	const char *broadcast = obs_data_get_string(settings, "broadcast");
@@ -217,32 +217,32 @@ static void hang_source_update(void *data, obs_data_t *settings)
 	ctx->broadcast = bstrdup(broadcast);
 
 	// Check if new settings are valid for connection
-	bool valid = ctx->url && ctx->broadcast && 
+	bool valid = ctx->url && ctx->broadcast &&
 	             strlen(ctx->url) > 0 && strlen(ctx->broadcast) > 0;
 
 	pthread_mutex_unlock(&ctx->mutex);
 
 	// If settings changed and are valid, reconnect
 	if (settings_changed && valid) {
-		LOG_INFO("Settings changed, reconnecting (url=%s, broadcast=%s)", 
+		LOG_INFO("Settings changed, reconnecting (url=%s, broadcast=%s)",
 		         url ? url : "(null)", broadcast ? broadcast : "(null)");
-		hang_source_reconnect(ctx);
+		moq_source_reconnect(ctx);
 	} else if (settings_changed && !valid) {
 		LOG_INFO("Settings changed but invalid - disconnecting");
 		pthread_mutex_lock(&ctx->mutex);
-		hang_source_disconnect_locked(ctx);
+		moq_source_disconnect_locked(ctx);
 		pthread_mutex_unlock(&ctx->mutex);
-		hang_source_blank_video(ctx);
+		moq_source_blank_video(ctx);
 	}
 }
 
-static void hang_source_get_defaults(obs_data_t *settings)
+static void moq_source_get_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "url", "http://localhost:4443");
 	obs_data_set_default_string(settings, "broadcast", "obs/test");
 }
 
-static obs_properties_t *hang_source_properties(void *data)
+static obs_properties_t *moq_source_properties(void *data)
 {
 	UNUSED_PARAMETER(data);
 
@@ -255,12 +255,12 @@ static obs_properties_t *hang_source_properties(void *data)
 }
 
 // Forward declaration for use in callback
-static void hang_source_start_consume(struct hang_source *ctx, uint32_t expected_gen);
+static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_gen);
 
 // MoQ callback implementations
 static void on_session_status(void *user_data, int32_t code)
 {
-	struct hang_source *ctx = (struct hang_source *)user_data;
+	struct moq_source *ctx = (struct moq_source *)user_data;
 
 	// Fast path: check atomic flag before taking lock
 	if (ctx->shutting_down.load()) {
@@ -280,16 +280,16 @@ static void on_session_status(void *user_data, int32_t code)
 		return;
 	}
 	uint32_t current_gen = ctx->generation;
-	
+
 	if (code == 0) {
 		pthread_mutex_unlock(&ctx->mutex);
 		LOG_INFO("MoQ session connected successfully (generation %u)", current_gen);
 		// Now that we're connected, start consuming the broadcast
-		hang_source_start_consume(ctx, current_gen);
+		moq_source_start_consume(ctx, current_gen);
 	} else {
 		// Connection failed - clean up the session and origin immediately
 		LOG_ERROR("MoQ session failed with code: %d (generation %u)", code, current_gen);
-		
+
 		// Clean up failed session/origin to prevent further callbacks
 		if (ctx->session >= 0) {
 			moq_session_close(ctx->session);
@@ -300,15 +300,15 @@ static void on_session_status(void *user_data, int32_t code)
 			ctx->origin = -1;
 		}
 		pthread_mutex_unlock(&ctx->mutex);
-		
+
 		// Blank the video to show error state
-		hang_source_blank_video(ctx);
+		moq_source_blank_video(ctx);
 	}
 }
 
 static void on_catalog(void *user_data, int32_t catalog)
 {
-	struct hang_source *ctx = (struct hang_source *)user_data;
+	struct moq_source *ctx = (struct moq_source *)user_data;
 
 	LOG_INFO("Catalog callback received: %d", catalog);
 
@@ -345,7 +345,7 @@ static void on_catalog(void *user_data, int32_t catalog)
 	if (catalog < 0) {
 		LOG_ERROR("Failed to get catalog: %d", catalog);
 		// Catalog failed (likely invalid broadcast) - blank video
-		hang_source_blank_video(ctx);
+		moq_source_blank_video(ctx);
 		return;
 	}
 
@@ -358,7 +358,7 @@ static void on_catalog(void *user_data, int32_t catalog)
 	}
 
 	// Initialize decoder with the video config (takes mutex internally)
-	if (!hang_source_init_decoder(ctx, &video_config)) {
+	if (!moq_source_init_decoder(ctx, &video_config)) {
 		LOG_ERROR("Failed to initialize decoder");
 		moq_consume_catalog_close(catalog);
 		return;
@@ -391,7 +391,7 @@ static void on_catalog(void *user_data, int32_t catalog)
 
 static void on_video_frame(void *user_data, int32_t frame_id)
 {
-	struct hang_source *ctx = (struct hang_source *)user_data;
+	struct moq_source *ctx = (struct moq_source *)user_data;
 
 	if (frame_id < 0) {
 		LOG_ERROR("Video frame callback with error: %d", frame_id);
@@ -422,34 +422,34 @@ static void on_video_frame(void *user_data, int32_t frame_id)
 	}
 	pthread_mutex_unlock(&ctx->mutex);
 
-	hang_source_decode_frame(ctx, frame_id);
+	moq_source_decode_frame(ctx, frame_id);
 }
 
 // Helper function implementations
-static void hang_source_reconnect(struct hang_source *ctx)
+static void moq_source_reconnect(struct moq_source *ctx)
 {
 	// Increment generation to invalidate old callbacks
 	pthread_mutex_lock(&ctx->mutex);
-	
+
 	// Check if reconnect is already in progress
 	if (ctx->reconnect_in_progress) {
 		LOG_DEBUG("Reconnect already in progress, skipping");
 		pthread_mutex_unlock(&ctx->mutex);
 		return;
 	}
-	
+
 	ctx->reconnect_in_progress = true;
 	uint32_t new_gen = ctx->generation.load() + 1;
 	LOG_INFO("Reconnecting (generation %u -> %u)", ctx->generation.load(), new_gen);
 	ctx->generation.store(new_gen);
-	hang_source_disconnect_locked(ctx);
+	moq_source_disconnect_locked(ctx);
 
 	// Copy URL while holding mutex for thread safety
 	char *url_copy = bstrdup(ctx->url);
 	pthread_mutex_unlock(&ctx->mutex);
 
 	// Blank video while reconnecting to avoid showing stale frames
-	hang_source_blank_video(ctx);
+	moq_source_blank_video(ctx);
 
 	// Small delay to allow MoQ library to fully clean up previous connection
 	os_sleep_ms(50);
@@ -503,7 +503,7 @@ static void hang_source_reconnect(struct hang_source *ctx)
 }
 
 // Called after session is connected successfully
-static void hang_source_start_consume(struct hang_source *ctx, uint32_t expected_gen)
+static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_gen)
 {
 	// Check if origin is still valid and generation matches
 	pthread_mutex_lock(&ctx->mutex);
@@ -535,7 +535,7 @@ static void hang_source_start_consume(struct hang_source *ctx, uint32_t expected
 			}
 		}
 		pthread_mutex_unlock(&ctx->mutex);
-		hang_source_blank_video(ctx);
+		moq_source_blank_video(ctx);
 		return;
 	}
 
@@ -573,7 +573,7 @@ static void hang_source_start_consume(struct hang_source *ctx, uint32_t expected
 			}
 		}
 		pthread_mutex_unlock(&ctx->mutex);
-		hang_source_blank_video(ctx);
+		moq_source_blank_video(ctx);
 		return;
 	}
 
@@ -582,7 +582,7 @@ static void hang_source_start_consume(struct hang_source *ctx, uint32_t expected
 }
 
 // NOTE: Caller must hold ctx->mutex when calling this function
-static void hang_source_disconnect_locked(struct hang_source *ctx)
+static void moq_source_disconnect_locked(struct moq_source *ctx)
 {
 	if (ctx->video_track >= 0) {
 		moq_consume_video_close(ctx->video_track);
@@ -609,21 +609,21 @@ static void hang_source_disconnect_locked(struct hang_source *ctx)
 		ctx->origin = -1;
 	}
 
-	hang_source_destroy_decoder_locked(ctx);
+	moq_source_destroy_decoder_locked(ctx);
 	ctx->got_keyframe = false;
 	ctx->frames_waiting_for_keyframe = 0;
 	ctx->consecutive_decode_errors = 0;
 }
 
 // Blanks the video preview by outputting a NULL frame
-static void hang_source_blank_video(struct hang_source *ctx)
+static void moq_source_blank_video(struct moq_source *ctx)
 {
 	// Passing NULL to obs_source_output_video clears the current frame
 	obs_source_output_video(ctx->source, NULL);
 	LOG_DEBUG("Video preview blanked");
 }
 
-static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_video_config *config)
+static bool moq_source_init_decoder(struct moq_source *ctx, const struct moq_video_config *config)
 {
 	// Map codec string to FFmpeg codec ID dynamically
 	AVCodecID codec_id = codec_string_to_id(config->codec, config->codec_len);
@@ -730,13 +730,13 @@ static bool hang_source_init_decoder(struct hang_source *ctx, const struct moq_v
 	if (config->codec && copy_len > 0) {
 		memcpy(codec_str, config->codec, copy_len);
 	}
-	LOG_INFO("Decoder initialized: codec=%s, dimensions=%ux%u (may be refined on first frame)", 
+	LOG_INFO("Decoder initialized: codec=%s, dimensions=%ux%u (may be refined on first frame)",
 	         codec_str, width, height);
 	return true;
 }
 
 // NOTE: Caller must hold ctx->mutex when calling this function
-static void hang_source_destroy_decoder_locked(struct hang_source *ctx)
+static void moq_source_destroy_decoder_locked(struct moq_source *ctx)
 {
 	if (ctx->sws_ctx) {
 		sws_freeContext(ctx->sws_ctx);
@@ -759,7 +759,7 @@ static void hang_source_destroy_decoder_locked(struct hang_source *ctx)
 	ctx->current_pix_fmt = AV_PIX_FMT_NONE;
 }
 
-static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
+static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 {
 	// Fast path: check atomic flag before taking lock
 	if (ctx->shutting_down.load()) {
@@ -796,9 +796,9 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 	// Skip non-keyframes until we get the first one
 	if (!ctx->got_keyframe && !frame_data.keyframe) {
 		ctx->frames_waiting_for_keyframe++;
-		if (ctx->frames_waiting_for_keyframe == 1 || 
+		if (ctx->frames_waiting_for_keyframe == 1 ||
 		    (ctx->frames_waiting_for_keyframe % 30) == 0) {
-			LOG_INFO("Waiting for keyframe... (skipped %u frames so far)", 
+			LOG_INFO("Waiting for keyframe... (skipped %u frames so far)",
 			         ctx->frames_waiting_for_keyframe);
 		}
 		pthread_mutex_unlock(&ctx->mutex);
@@ -809,7 +809,7 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 	// Mark that we've received a keyframe from the stream
 	if (frame_data.keyframe) {
 		if (!ctx->got_keyframe) {
-			LOG_INFO("Got keyframe after waiting for %u frames, payload_size=%zu", 
+			LOG_INFO("Got keyframe after waiting for %u frames, payload_size=%zu",
 			         ctx->frames_waiting_for_keyframe, frame_data.payload_size);
 			// Flush decoder to ensure clean state when starting from keyframe
 			avcodec_flush_buffers(ctx->codec_ctx);
@@ -841,10 +841,10 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 			ctx->consecutive_decode_errors++;
 			char errbuf[AV_ERROR_MAX_STRING_SIZE];
 			av_strerror(ret, errbuf, sizeof(errbuf));
-			
+
 			// If too many consecutive errors, flush decoder and wait for next keyframe
 			if (ctx->consecutive_decode_errors >= 5) {
-				LOG_WARNING("Too many send errors (%u), flushing decoder and waiting for keyframe", 
+				LOG_WARNING("Too many send errors (%u), flushing decoder and waiting for keyframe",
 				            ctx->consecutive_decode_errors);
 				avcodec_flush_buffers(ctx->codec_ctx);
 				ctx->got_keyframe = false;
@@ -872,10 +872,10 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 			ctx->consecutive_decode_errors++;
 			char errbuf[AV_ERROR_MAX_STRING_SIZE];
 			av_strerror(ret, errbuf, sizeof(errbuf));
-			
+
 			// If too many consecutive errors, flush decoder and wait for next keyframe
 			if (ctx->consecutive_decode_errors >= 5) {
-				LOG_WARNING("Too many decode errors (%u), flushing decoder and waiting for keyframe", 
+				LOG_WARNING("Too many decode errors (%u), flushing decoder and waiting for keyframe",
 				            ctx->consecutive_decode_errors);
 				avcodec_flush_buffers(ctx->codec_ctx);
 				ctx->got_keyframe = false;
@@ -890,7 +890,7 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 		moq_consume_frame_close(frame_id);
 		return;
 	}
-	
+
 	// Successfully decoded a frame - reset error counter
 	ctx->consecutive_decode_errors = 0;
 
@@ -907,7 +907,7 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 		}
 		if (pix_fmt_changed) {
 			LOG_INFO("Decoded frame pixel format changed: %d -> %d (%s)",
-			         ctx->current_pix_fmt, decoded_pix_fmt, 
+			         ctx->current_pix_fmt, decoded_pix_fmt,
 			         av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
 		}
 
@@ -943,7 +943,7 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 			SWS_BILINEAR, NULL, NULL, NULL
 		);
 		if (!new_sws_ctx) {
-			LOG_ERROR("Failed to create scaling context for %dx%d pix_fmt=%d (%s)", 
+			LOG_ERROR("Failed to create scaling context for %dx%d pix_fmt=%d (%s)",
 			          frame->width, frame->height, decoded_pix_fmt,
 			          av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
 			av_frame_free(&frame);
@@ -979,7 +979,7 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 		ctx->frame.linesize[0] = frame->width * 4;
 		ctx->frame.data[0] = new_frame_buffer;
 
-		LOG_INFO("Scaler initialized for %dx%d pix_fmt=%s", 
+		LOG_INFO("Scaler initialized for %dx%d pix_fmt=%s",
 		         frame->width, frame->height,
 		         av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
 	}
@@ -1001,20 +1001,20 @@ static void hang_source_decode_frame(struct hang_source *ctx, int32_t frame_id)
 }
 
 // Registration function
-void register_hang_source()
+void register_moq_source()
 {
 	struct obs_source_info info = {};
-	info.id = "hang_source";
+	info.id = "moq_source";
 	info.type = OBS_SOURCE_TYPE_INPUT;
 	info.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_DO_NOT_DUPLICATE;
 	info.get_name = [](void *) -> const char * {
-		return "Hang Source (MoQ)";
+		return "Moq Source (MoQ)";
 	};
-	info.create = hang_source_create;
-	info.destroy = hang_source_destroy;
-	info.update = hang_source_update;
-	info.get_defaults = hang_source_get_defaults;
-	info.get_properties = hang_source_properties;
+	info.create = moq_source_create;
+	info.destroy = moq_source_destroy;
+	info.update = moq_source_update;
+	info.get_defaults = moq_source_get_defaults;
+	info.get_properties = moq_source_properties;
 
 	obs_register_source(&info);
 }

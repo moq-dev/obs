@@ -61,7 +61,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${FFMPEG_LIBRARIES})
 target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE src/obs-moq.cpp src/moq-output.h src/moq-service.h src/moq-output.cpp src/moq-service.cpp
-          src/hang-source.cpp src/hang-source.h
+          src/moq-source.cpp src/moq-source.h
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
