@@ -59,6 +59,9 @@ Prerequisites:
 # macOS
 cp -a build_macos/RelWithDebInfo/obs-moq.plugin ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/PlugIns/
 
+# Linux
+cp build_x86_64/obs-moq.so ~/.config/obs-studio/plugins/obs-moq/bin/64bit/obs-moq.so
+
 # eventually, without the fork:
 cp -a build_macos/RelWithDebInfo/obs-moq.plugin ~/Library/Application\ Support/obs-studio/plugins/
 ```
@@ -69,13 +72,13 @@ cp -a build_macos/RelWithDebInfo/obs-moq.plugin ~/Library/Application\ Support/o
 RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/MacOS/OBS
 ```
 
-## Usage
+## Configuring MoQ Output Streaming
 
 1.  Open OBS Studio.
 2.  Go to **Settings** > **Stream**.
 3.  In the **Service** dropdown, select **MoQ**.
 4.  Enter your MoQ Server details:
-    * For development (`just dev`): `http://localhost:4433/anon`.
+    * For development (`just dev`): `http://localhost:4443/anon`.
     * For testing: `https://cdn.moq.dev/anon`.
 5.  Enter the broadcast name/path:
     * For testing: `obs` or some unique string.
@@ -83,6 +86,40 @@ RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/fr
 5.  Configure your Output settings (Codecs, Bitrate) as desired.
     * Currently, only: `h264` and `aac` are supported.
 6.  Start Streaming!
+
+
+## Manual MoQ Output Streaming Configuration
+
+For configuring via a file, prior to launching OBS you can add this to your OBS Profile directory (eg: "Untitled"):
+```bash
+# Linux
+$ cat ~/.config/obs-studio/basic/profiles/Untitled/service.json
+
+# MacOS
+$ cat ~/Library/Application\ Support/obs-studio/basic/profiles/Untitled/service.json
+
+{
+  "type": "moq_service",
+  "settings": {
+    "server": "http://localhost:4443/",
+    "use_auth": false,
+    "bwtest": false,
+    "service": "MoQ",
+    "key": "anon/bbb"
+  }
+}
+```
+
+## MoQ Source (experimental)
+
+1. Open OBS Studio
+2. Goto **Sources** > (right-click) **MoQ Source**
+3. Enter your MoQ Server details, eg:
+    * For development (`just dev`): `http://localhost:4443/anon`.
+4.  Enter the broadcast name/path:
+    * For development: `bbb`.
+5. Click **OK**
+
 
 ## Supported Build Environments
 
@@ -95,6 +132,8 @@ RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/fr
 | Ubuntu 24.04 | `ninja-build` |
 | Ubuntu 24.04 | `pkg-config`
 | Ubuntu 24.04 | `build-essential` |
+
+
 
 ## License
 
