@@ -13,9 +13,19 @@ include(helpers)
 
 add_library(obs-moq MODULE)
 
-if(NOT ${BUILD_PLUGIN})
+if(${BUILD_PLUGIN})
   find_package(libobs REQUIRED)
+  # FFmpeg dependency
+  include(FindPkgConfig)
+  pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libswscale libswresample)
+  target_include_directories(obs-moq PRIVATE ${FFMPEG_INCLUDE_DIRS})
+  target_link_directories(obs-moq PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_libraries(obs-moq PRIVATE ${FFMPEG_LIBRARIES})
+else()
+  find_package(FFmpeg REQUIRED avcodec avutil swscale swresample)
+  target_link_libraries(obs-moq PRIVATE FFmpeg::avcodec FFmpeg::avutil FFmpeg::swscale FFmpeg::swresample)
 endif()
+
 target_link_libraries(obs-moq PRIVATE OBS::libobs)
 
 option(MOQ_LOCAL "Path to moq repo for local development" "")
@@ -53,13 +63,6 @@ if(ENABLE_QT)
     PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON
   )
 endif()
-
-# FFmpeg dependency
-include(FindPkgConfig)
-pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libswscale libswresample)
-target_include_directories(obs-moq PRIVATE ${FFMPEG_INCLUDE_DIRS})
-target_link_directories(obs-moq PRIVATE ${FFMPEG_LIBRARY_DIRS})
-target_link_libraries(obs-moq PRIVATE ${FFMPEG_LIBRARIES})
 
 target_sources(
   obs-moq
