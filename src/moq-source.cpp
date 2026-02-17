@@ -6,6 +6,9 @@
 
 #include <atomic>
 
+#ifdef _WIN32
+#define strncasecmp _strnicmp
+#endif
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
@@ -669,7 +672,7 @@ static bool moq_source_init_decoder(struct moq_source *ctx, const struct moq_vid
 		new_codec_ctx->extradata = (uint8_t *)av_mallocz(config->description_len + AV_INPUT_BUFFER_PADDING_SIZE);
 		if (new_codec_ctx->extradata) {
 			memcpy(new_codec_ctx->extradata, config->description, config->description_len);
-			new_codec_ctx->extradata_size = config->description_len;
+			new_codec_ctx->extradata_size = static_cast<int>(config->description_len);
 		}
 	}
 
@@ -827,7 +830,7 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 	}
 
 	packet->data = (uint8_t *)frame_data.payload;
-	packet->size = frame_data.payload_size;
+	packet->size = static_cast<int>(frame_data.payload_size);
 	packet->pts = frame_data.timestamp_us / 1000; // Convert to milliseconds
 	packet->dts = packet->pts;
 
