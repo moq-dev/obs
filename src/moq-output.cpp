@@ -74,7 +74,7 @@ bool MoQOutput::Start()
 
 		if (error_code == 0) {
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
-			self->connect_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms,
 				 self->server_url.c_str());
 		} else {
@@ -156,9 +156,17 @@ void MoQOutput::AudioData(struct encoder_packet *packet)
 		return;
 	}
 
-	auto pts = util_mul_div64(packet->pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
+	// Add ~1 second offset to handle negative PTS from audio priming frames.
+	// TODO: This is slightly wrong when den is not evenly divisible by num, but close enough.
+	int64_t pts = packet->pts + packet->timebase_den / packet->timebase_num;
+	if (pts < 0) {
+		LOG_WARNING("Dropping audio frame with negative PTS: %lld", (long long)packet->pts);
+		return;
+	}
 
-	auto result = moq_publish_media_frame(audio, packet->data, packet->size, pts);
+	auto pts_us = util_mul_div64(pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
+
+	auto result = moq_publish_media_frame(audio, packet->data, packet->size, pts_us);
 	if (result < 0) {
 		LOG_ERROR("Failed to write audio frame: %d", result);
 		return;
@@ -177,9 +185,17 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 		return;
 	}
 
-	auto pts = util_mul_div64(packet->pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
+	// Add ~1 second offset to match audio for A/V sync.
+	// TODO: This is slightly wrong when den is not evenly divisible by num, but close enough.
+	int64_t pts = packet->pts + packet->timebase_den / packet->timebase_num;
+	if (pts < 0) {
+		LOG_WARNING("Dropping video frame with negative PTS: %lld", (long long)packet->pts);
+		return;
+	}
 
-	auto result = moq_publish_media_frame(video, packet->data, packet->size, pts);
+	auto pts_us = util_mul_div64(pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
+
+	auto result = moq_publish_media_frame(video, packet->data, packet->size, pts_us);
 	if (result < 0) {
 		LOG_ERROR("Failed to write video frame: %d", result);
 		return;
@@ -220,7 +236,18 @@ void MoQOutput::VideoInit()
 
 	const char *codec = obs_encoder_get_codec(encoder);
 
-	video = moq_publish_media_ordered(broadcast, codec, strlen(codec), extra_data, extra_size);
+	// Transform codec string for MoQ
+	const char *moq_codec = codec;
+	if (strcmp(codec, "h264") == 0) {
+		// H.264 with inline SPS/PPS
+		moq_codec = "avc3";
+	} else if (strcmp(codec, "hevc") == 0) {
+		// H.265 with inline VPS/SPS/PPS
+		moq_codec = "hev1";
+	}
+
+	// Intialize the media import module with the codec and initialization data.
+	video = moq_publish_media_ordered(broadcast, moq_codec, strlen(moq_codec), extra_data, extra_size);
 	if (video < 0) {
 		LOG_ERROR("Failed to initialize video track: %d", video);
 		return;
@@ -272,10 +299,8 @@ void register_moq_output()
 {
 	const uint32_t base_flags = OBS_OUTPUT_ENCODED | OBS_OUTPUT_SERVICE;
 
-	// TODO: Add support for other codecs.
-	const char *audio_codecs = "aac";
-	// TODO: Add support for other codecs.
-	const char *video_codecs = "h264;av1";
+	const char *audio_codecs = "aac;opus";
+	const char *video_codecs = "h264;hevc;av1";
 
 	struct obs_output_info info = {};
 	info.id = "moq_output";

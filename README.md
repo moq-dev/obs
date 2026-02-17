@@ -54,22 +54,18 @@ Prerequisites:
     just build
     ```
 
-2. Copy the plugin to the OBS Studio plugins directory:
+2. Copy the plugin to the OBS Studio plugins directory and run it:
+
 ```bash
-# macOS
-cp -a build_macos/RelWithDebInfo/obs-moq.plugin ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/PlugIns/
-
-# Linux
-cp build_x86_64/obs-moq.so ~/.config/obs-studio/plugins/obs-moq/bin/64bit/obs-moq.so
-
-# eventually, without the fork:
-cp -a build_macos/RelWithDebInfo/obs-moq.plugin ~/Library/Application\ Support/obs-studio/plugins/
+# macOS only:
+# This script assumes a local fork of OBS Studio in ../obs-studio
+just run
 ```
 
-3. Run OBS Studio with some extra logging for debugging.
+On linux you'll have to do:
 ```bash
-# macOS
-RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/MacOS/OBS
+cp build_x86_64/obs-moq.so ~/.config/obs-studio/plugins/obs-moq/bin/64bit/obs-moq.so
+# TODO: add Linux command to `just run`
 ```
 
 ## Configuring MoQ Output Streaming

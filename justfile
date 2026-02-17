@@ -32,6 +32,15 @@ build preset="":
 	PRESET=$(just preset "{{preset}}")
 	cmake --build --preset "$PRESET"
 
+# Run a local fork of OBS Studio with the plugin loaded
+# TODO support for other platforms
+run:
+	# Copy the plugin to the OBS Studio plugins directory
+	cp -a build_macos/RelWithDebInfo/obs-moq.plugin ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/PlugIns/
+
+	# Run OBS Studio with the plugin loaded
+	RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/MacOS/OBS
+
 # Run the CI checks
 check:
 	./build-aux/run-clang-format --check
