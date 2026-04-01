@@ -14,8 +14,8 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  total_bytes_sent(0),
 	  connect_time_ms(0),
 	  origin(moq_origin_create()),
-	  broadcast(moq_publish_create()),
-	  session(0)
+	  session(0),
+	  broadcast(moq_publish_create())
 {
 }
 
@@ -155,10 +155,11 @@ void MoQOutput::AudioData(struct encoder_packet *packet)
 {
 	obs_encoder_t *encoder = packet->encoder;
 
-	if (audio_tracks.find(encoder) == audio_tracks.end())
-		AudioInit(encoder);
-
 	auto it = audio_tracks.find(encoder);
+	if (it == audio_tracks.end()) {
+		AudioInit(encoder);
+		it = audio_tracks.find(encoder);
+	}
 	if (it == audio_tracks.end() || it->second < 0) {
 		// We failed to initialize the audio track, so we can't write any data.
 		return;
@@ -188,10 +189,11 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 {
 	obs_encoder_t *encoder = packet->encoder;
 
-	if (video_tracks.find(encoder) == video_tracks.end())
-		VideoInit(encoder);
-
 	auto it = video_tracks.find(encoder);
+	if (it == video_tracks.end()) {
+		VideoInit(encoder);
+		it = video_tracks.find(encoder);
+	}
 	if (it == video_tracks.end() || it->second < 0)
 		return;
 	int handle = it->second;
