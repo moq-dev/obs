@@ -25,7 +25,6 @@ function(_check_dependencies_macos)
   execute_process(
     COMMAND "xattr" -r -d com.apple.quarantine "${dependencies_dir}"
     RESULT_VARIABLE result
-    COMMAND_ERROR_IS_FATAL ANY
   )
 
   list(APPEND CMAKE_FRAMEWORK_PATH "${dependencies_dir}/Frameworks")

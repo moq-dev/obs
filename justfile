@@ -8,64 +8,76 @@ set quiet
 default:
   just --list
 
+# Run the CI checks (lint + build)
+ci:
+    just check
+    just setup
+    just build
+
+# Run the lint checks
+check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    clang-format --dry-run --Werror src/*.cpp src/*.h
+    gersemi --check CMakeLists.txt
+
+# Automatically fix formatting issues.
+fix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    clang-format -i src/*.cpp src/*.h
+    gersemi -i CMakeLists.txt
+
 # Configure the project using CMake presets (optionally specify MOQ_LOCAL path and preset)
 setup path="" preset="":
-	#!/usr/bin/env bash
-	set -euo pipefail
+    #!/usr/bin/env bash
+    set -euo pipefail
 
-	PRESET=$(just preset "{{preset}}")
+    PRESET=$(just preset "{{preset}}")
 
-	# Add MOQ_LOCAL if path is provided
-	if [[ -n "{{path}}" ]]; then
-		echo "Configuring with preset: $PRESET and MOQ_LOCAL={{path}}"
-		cmake --preset "$PRESET" -DMOQ_LOCAL="{{path}}"
-	else
-		echo "Configuring with preset: $PRESET"
-		cmake --preset "$PRESET"
-	fi
+    # Add MOQ_LOCAL if path is provided
+    if [[ -n "{{path}}" ]]; then
+        echo "Configuring with preset: $PRESET and MOQ_LOCAL={{path}}"
+        cmake --preset "$PRESET" -DMOQ_LOCAL="{{path}}"
+    else
+        echo "Configuring with preset: $PRESET"
+        cmake --preset "$PRESET"
+    fi
 
 # Build the project using CMake presets (optionally specify preset name)
 build preset="":
-	#!/usr/bin/env bash
-	set -euo pipefail
+    #!/usr/bin/env bash
+    set -euo pipefail
 
-	PRESET=$(just preset "{{preset}}")
-	cmake --build --preset "$PRESET"
+    PRESET=$(just preset "{{preset}}")
+    cmake --build --preset "$PRESET"
 
 # Run a local fork of OBS Studio with the plugin loaded
 # TODO support for other platforms
 run:
-	# Copy the plugin to the OBS Studio plugins directory
-	cp -a build_macos/RelWithDebInfo/obs-moq.plugin ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/PlugIns/
+    # Copy the plugin to the OBS Studio plugins directory
+    cp -a build_macos/RelWithDebInfo/obs-moq.plugin ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/PlugIns/
 
-	# Run OBS Studio with the plugin loaded
-	RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/MacOS/OBS
-
-# Run the CI checks
-check:
-	./build-aux/run-clang-format --check
-	./build-aux/run-gersemi --check
-
-# Automatically fix formatting issues.
-fix:
-	./build-aux/run-clang-format --fix
-	./build-aux/run-gersemi --fix
+    # Run OBS Studio with the plugin loaded
+    RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/frontend/RelWithDebInfo/OBS.app/Contents/MacOS/OBS
 
 # Detect the appropriate CMake preset for the current platform (or use override)
 preset override="":
-	#!/usr/bin/env bash
-	set -euo pipefail
+    #!/usr/bin/env bash
+    set -euo pipefail
 
-	# Use provided override or auto-detect
-	if [[ -n "{{override}}" ]]; then
-		echo "{{override}}"
-	elif [[ "$OSTYPE" == "darwin"* ]]; then
-		echo "macos"
-	elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-		echo "ubuntu-x86_64"
-	elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-		echo "windows-x64"
-	else
-		echo "Unknown platform: $OSTYPE" >&2
-		exit 1
-	fi
+    # Use provided override or auto-detect
+    if [[ -n "{{override}}" ]]; then
+        echo "{{override}}"
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "macos"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        echo "ubuntu-x86_64"
+    elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+        echo "windows-x64"
+    else
+        echo "Unknown platform: $OSTYPE" >&2
+        exit 1
+    fi
