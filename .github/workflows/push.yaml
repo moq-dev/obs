@@ -4,7 +4,7 @@ on:
     branches: [master, main]
     tags: ["*"]
 permissions:
-  contents: write
+  contents: read
 jobs:
   check:
     name: Lint
@@ -48,13 +48,13 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - name: Install just
-        run: choco install just -y
-      - name: Install FFmpeg
-        run: choco install ffmpeg-full -y
+      - name: Install dependencies
+        run: choco install just pkgconfiglite ffmpeg-full -y
       - name: Setup
         shell: bash
-        run: just setup
+        run: |
+          export PKG_CONFIG_PATH="/c/ProgramData/chocolatey/lib/ffmpeg-full/tools/ffmpeg/lib/pkgconfig"
+          just setup
       - name: Build
         shell: bash
         run: just build
@@ -69,6 +69,8 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     needs: [build-linux, build-macos, build-windows]
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
