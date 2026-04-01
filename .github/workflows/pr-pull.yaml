@@ -39,9 +39,13 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Install just
+        run: choco install just -y
       - name: Install FFmpeg
         run: choco install ffmpeg-full -y
       - name: Setup
+        shell: bash
         run: just setup
       - name: Build
+        shell: bash
         run: just build

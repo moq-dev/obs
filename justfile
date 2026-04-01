@@ -20,7 +20,7 @@ check:
     set -euo pipefail
 
     clang-format --dry-run --Werror src/*.cpp src/*.h
-    gersemi --check CMakeLists.txt
+    gersemi --check CMakeLists.txt cmake/**/*.cmake
 
 # Automatically fix formatting issues.
 fix:
@@ -28,7 +28,7 @@ fix:
     set -euo pipefail
 
     clang-format -i src/*.cpp src/*.h
-    gersemi -i CMakeLists.txt
+    gersemi -i CMakeLists.txt cmake/**/*.cmake
 
 # Configure the project using CMake presets (optionally specify MOQ_LOCAL path and preset)
 setup path="" preset="":

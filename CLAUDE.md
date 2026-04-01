@@ -89,9 +89,8 @@ RUST_LOG=debug RUST_BACKTRACE=1 OBS_LOG_LEVEL=debug ../obs-studio/build_macos/fr
 
 ## Code Style
 
-- Use `./build-aux/run-clang-format` for C++ formatting
-- Use `./build-aux/run-gersemi` for CMake formatting
-- Both tools support `--check` (CI) and `--fix` (auto-format) modes
+- Use `just check` to verify formatting (clang-format for C++, gersemi for CMake)
+- Use `just fix` to automatically fix formatting issues
 
 ## Logging
 
