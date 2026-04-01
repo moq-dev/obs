@@ -15,9 +15,7 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  connect_time_ms(0),
 	  origin(moq_origin_create()),
 	  broadcast(moq_publish_create()),
-	  session(0),
-	  video(0),
-	  audio(0)
+	  session(0)
 {
 }
 
@@ -57,9 +55,15 @@ bool MoQOutput::Start()
 
 	path = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_STREAM_KEY);
 
-	const obs_encoder_t *encoder = obs_output_get_video_encoder2(output, 0);
+	bool found_encoder = false;
+	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
+		if (obs_output_get_video_encoder2(output, idx)) {
+			found_encoder = true;
+			break;
+		}
+	}
 
-	if (!encoder) {
+	if (!found_encoder) {
 		LOG_ERROR("Failed to get video encoder");
 		return false;
 	}
@@ -113,15 +117,17 @@ void MoQOutput::Stop(bool signal)
 		session = 0;
 	}
 
-	if (video > 0) {
-		moq_publish_media_close(video);
-		video = 0;
+	for (auto &[encoder, handle] : video_tracks) {
+		if (handle > 0)
+			moq_publish_media_close(handle);
 	}
+	video_tracks.clear();
 
-	if (audio > 0) {
-		moq_publish_media_close(audio);
-		audio = 0;
+	for (auto &[encoder, handle] : audio_tracks) {
+		if (handle > 0)
+			moq_publish_media_close(handle);
 	}
+	audio_tracks.clear();
 
 	if (signal) {
 		obs_output_signal_stop(output, OBS_OUTPUT_SUCCESS);
@@ -147,14 +153,17 @@ void MoQOutput::Data(struct encoder_packet *packet)
 
 void MoQOutput::AudioData(struct encoder_packet *packet)
 {
-	if (audio == 0) {
-		AudioInit();
-	}
+	obs_encoder_t *encoder = packet->encoder;
 
-	if (audio < 0) {
+	if (audio_tracks.find(encoder) == audio_tracks.end())
+		AudioInit(encoder);
+
+	auto it = audio_tracks.find(encoder);
+	if (it == audio_tracks.end() || it->second < 0) {
 		// We failed to initialize the audio track, so we can't write any data.
 		return;
 	}
+	int handle = it->second;
 
 	// Add ~1 second offset to handle negative PTS from audio priming frames.
 	// TODO: This is slightly wrong when den is not evenly divisible by num, but close enough.
@@ -166,7 +175,7 @@ void MoQOutput::AudioData(struct encoder_packet *packet)
 
 	auto pts_us = util_mul_div64(pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
 
-	auto result = moq_publish_media_frame(audio, packet->data, packet->size, pts_us);
+	auto result = moq_publish_media_frame(handle, packet->data, packet->size, pts_us);
 	if (result < 0) {
 		LOG_ERROR("Failed to write audio frame: %d", result);
 		return;
@@ -177,13 +186,15 @@ void MoQOutput::AudioData(struct encoder_packet *packet)
 
 void MoQOutput::VideoData(struct encoder_packet *packet)
 {
-	if (video == 0) {
-		VideoInit();
-	}
+	obs_encoder_t *encoder = packet->encoder;
 
-	if (video < 0) {
+	if (video_tracks.find(encoder) == video_tracks.end())
+		VideoInit(encoder);
+
+	auto it = video_tracks.find(encoder);
+	if (it == video_tracks.end() || it->second < 0)
 		return;
-	}
+	int handle = it->second;
 
 	// Add ~1 second offset to match audio for A/V sync.
 	// TODO: This is slightly wrong when den is not evenly divisible by num, but close enough.
@@ -195,7 +206,7 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 
 	auto pts_us = util_mul_div64(pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
 
-	auto result = moq_publish_media_frame(video, packet->data, packet->size, pts_us);
+	auto result = moq_publish_media_frame(handle, packet->data, packet->size, pts_us);
 	if (result < 0) {
 		LOG_ERROR("Failed to write video frame: %d", result);
 		return;
@@ -204,9 +215,8 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 	total_bytes_sent += packet->size;
 }
 
-void MoQOutput::VideoInit()
+void MoQOutput::VideoInit(obs_encoder_t *encoder)
 {
-	obs_encoder_t *encoder = obs_output_get_video_encoder(output);
 	if (!encoder) {
 		LOG_ERROR("Failed to get video encoder");
 		return;
@@ -247,18 +257,18 @@ void MoQOutput::VideoInit()
 	}
 
 	// Intialize the media import module with the codec and initialization data.
-	video = moq_publish_media_ordered(broadcast, moq_codec, strlen(moq_codec), extra_data, extra_size);
-	if (video < 0) {
-		LOG_ERROR("Failed to initialize video track: %d", video);
+	int handle = moq_publish_media_ordered(broadcast, moq_codec, strlen(moq_codec), extra_data, extra_size);
+	video_tracks[encoder] = handle;
+	if (handle < 0) {
+		LOG_ERROR("Failed to initialize video track: %d", handle);
 		return;
 	}
 
 	LOG_INFO("Video track initialized successfully");
 }
 
-void MoQOutput::AudioInit()
+void MoQOutput::AudioInit(obs_encoder_t *encoder)
 {
-	obs_encoder_t *encoder = obs_output_get_audio_encoder(output, 0);
 	if (!encoder) {
 		LOG_ERROR("Failed to get audio encoder");
 		return;
@@ -286,9 +296,10 @@ void MoQOutput::AudioInit()
 
 	const char *codec = obs_encoder_get_codec(encoder);
 
-	audio = moq_publish_media_ordered(broadcast, codec, strlen(codec), extra_data, extra_size);
-	if (audio < 0) {
-		LOG_ERROR("Failed to initialize audio track: %d", audio);
+	int handle = moq_publish_media_ordered(broadcast, codec, strlen(codec), extra_data, extra_size);
+	audio_tracks[encoder] = handle;
+	if (handle < 0) {
+		LOG_ERROR("Failed to initialize audio track: %d", handle);
 		return;
 	}
 
@@ -297,7 +308,8 @@ void MoQOutput::AudioInit()
 
 void register_moq_output()
 {
-	const uint32_t base_flags = OBS_OUTPUT_ENCODED | OBS_OUTPUT_SERVICE;
+	const uint32_t base_flags = OBS_OUTPUT_ENCODED | OBS_OUTPUT_SERVICE | OBS_OUTPUT_MULTI_TRACK_VIDEO |
+				    OBS_OUTPUT_MULTI_TRACK_AUDIO;
 
 	const char *audio_codecs = "aac;opus";
 	const char *video_codecs = "h264;hevc;av1";
