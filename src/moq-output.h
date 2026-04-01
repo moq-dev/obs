@@ -19,11 +19,11 @@ public:
 
 	inline int GetConnectTime() { return connect_time_ms; }
 
-      private:
-    void VideoInit(obs_encoder_t *encoder);
-    void VideoData(struct encoder_packet *packet);
-    void AudioInit(obs_encoder_t *encoder);
-    void AudioData(struct encoder_packet *packet);
+private:
+	void VideoInit(obs_encoder_t *encoder);
+	void VideoData(struct encoder_packet *packet);
+	void AudioInit(obs_encoder_t *encoder);
+	void AudioData(struct encoder_packet *packet);
 
 	obs_output_t *output;
 
@@ -34,11 +34,11 @@ public:
 	int connect_time_ms;
 	std::chrono::steady_clock::time_point connect_start;
 
-    int origin;
-    int session;
-    int broadcast;
-    std::map<obs_encoder_t *, int> video_tracks;
-    std::map<obs_encoder_t *, int> audio_tracks;
+	int origin;
+	int session;
+	int broadcast;
+	std::map<obs_encoder_t *, int> video_tracks;
+	std::map<obs_encoder_t *, int> audio_tracks;
 };
 
 void register_moq_output();
