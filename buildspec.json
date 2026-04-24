@@ -1,21 +1,21 @@
 {
     "dependencies": {
         "obs-studio": {
-            "version": "31.1.1",
+            "version": "32.1.2",
             "baseUrl": "https://github.com/obsproject/obs-studio/archive/refs/tags",
             "label": "OBS sources",
             "hashes": {
-                "macos": "39751f067bacc13d44b116c5138491b5f1391f91516d3d590d874edd21292291",
-                "windows-x64": "2c8427c10b55ac6d68008df2e9a3e82f4647aaad18f105e30d4713c2de678ccf"
+                "macos": "2aeb3aaa99544fefd557f10ac6550e73df71540dd57528b2a1e6f39a55ebacfb",
+                "windows-x64": "21cba22292985cf0da967d5c618999b40eaa32b73d2ab8b06154b5ea1b3d3798"
             }
         },
         "prebuilt": {
-            "version": "2025-07-11",
+            "version": "2025-08-23",
             "baseUrl": "https://github.com/obsproject/obs-deps/releases/download",
             "label": "Pre-Built obs-deps",
             "hashes": {
-                "macos": "495687e63383d1a287684b6e2e9bfe246bb8f156fe265926afb1a325af1edd2a",
-                "windows-x64": "c8c642c1070dc31ce9a0f1e4cef5bb992f4bff4882255788b5da12129e85caa7"
+                "macos": "9403bb43fb0a9bb215739a5659ca274fe884dbbbcd22bd9ca781c961fb041c42",
+                "windows-x64": "8de229cff6f1981508c0eb646b35e644633a5855787b9f5d3b90ae2aeb87ffc1"
             }
         },
         "qt6": {
