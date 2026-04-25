@@ -29,7 +29,9 @@ if(${BUILD_PLUGIN})
     find_library(SWSCALE_LIB swscale)
     find_library(SWRESAMPLE_LIB swresample)
 
-    target_link_libraries(obs-moq PRIVATE ${AVCODEC_LIB} ${AVUTIL_LIB} ${SWSCALE_LIB} ${SWRESAMPLE_LIB})
+    if (AVCODEC_LIB)
+      target_link_libraries(obs-moq PRIVATE ${AVCODEC_LIB} ${AVUTIL_LIB} ${SWSCALE_LIB} ${SWRESAMPLE_LIB})
+    endif()
 
   endif()
 else()
