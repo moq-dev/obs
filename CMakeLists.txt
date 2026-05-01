@@ -15,24 +15,19 @@ add_library(obs-moq MODULE)
 
 if(${BUILD_PLUGIN})
   find_package(libobs REQUIRED)
-  # FFmpeg dependency
-  if(NOT OS_WINDOWS)
-    pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libswscale libswresample)
-    target_include_directories(obs-moq PRIVATE ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(obs-moq PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(obs-moq PRIVATE ${FFMPEG_LIBRARIES})
-  else()
+  # FFmpeg dependency. Use provided pre-built dependancies
+  find_library(AVCODEC_LIB avcodec)
+  find_library(AVUTIL_LIB avutil)
+  find_library(SWSCALE_LIB swscale)
+  find_library(SWRESAMPLE_LIB swresample)
+
+  if (AVCODEC_LIB)
+    target_link_libraries(obs-moq PRIVATE ${AVCODEC_LIB} ${AVUTIL_LIB} ${SWSCALE_LIB} ${SWRESAMPLE_LIB})
+  endif()
+
+  # Link required windows system libraries
+  if(OS_WINDOWS)
     target_link_libraries(obs-moq PRIVATE Userenv ntdll)
-
-    find_library(AVCODEC_LIB avcodec)
-    find_library(AVUTIL_LIB avutil)
-    find_library(SWSCALE_LIB swscale)
-    find_library(SWRESAMPLE_LIB swresample)
-
-    if (AVCODEC_LIB)
-      target_link_libraries(obs-moq PRIVATE ${AVCODEC_LIB} ${AVUTIL_LIB} ${SWSCALE_LIB} ${SWRESAMPLE_LIB})
-    endif()
-
   endif()
 else()
   find_package(FFmpeg REQUIRED avcodec avutil swscale swresample)

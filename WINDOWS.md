@@ -35,3 +35,6 @@ For now copy the build plugin libraries to the build obs fork
 ```powershell
 Copy-Item -Path "build_x64/rundir/RelWithDebInfo/" -Destination "../obs-studio/build_x64/rundir/RelWithDebInfo/obs-plugins" -Recurse
 ```
+
+## Debugging Moq Plugin
+ $env:RUST_LOG="debug"; $env:RUST_BACKTRACE=1; $env:OBS_LOG_LEVEL="debug"; .\obs64.exe -verbose
