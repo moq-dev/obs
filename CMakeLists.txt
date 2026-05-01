@@ -24,11 +24,6 @@ if(${BUILD_PLUGIN})
   if (AVCODEC_LIB)
     target_link_libraries(obs-moq PRIVATE ${AVCODEC_LIB} ${AVUTIL_LIB} ${SWSCALE_LIB} ${SWRESAMPLE_LIB})
   endif()
-
-  # Enable swift for macOS to configure OBS correctly.
-  if (OS_MACOS)
-    enable_language(Swift)
-  endif()
   
   # Link required windows system libraries
   if(OS_WINDOWS)
