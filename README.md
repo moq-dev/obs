@@ -18,11 +18,12 @@ Prerequisites:
 *   C++ Compiler (Clang/GCC/MSVC)
 *   OBS Studio development libraries (libobs)
 *   [Fork of OBS-Studio](https://github.com/brianmed/obs-studio) just to show MoQ in the UI.
+*   XCode 16.3 / macOS 15
 
 1.  Clone the repos:
     ```bash
     git clone https://github.com/moq-dev/obs.git moq-obs
-    git clone https://github.com/brianmed/obs-studio.git obs-studio
+    git clone --recurse-submodules  https://github.com/brianmed/obs-studio.git obs-studio
 
     # optional: for local moq development
     git clone https://github.com/moq-dev/moq.git moq
@@ -32,9 +33,21 @@ Prerequisites:
     ```bash
     cd obs-studio
 
-    # Replace with your platform
+    # Configure for Windows
+    cmake -G "Visual Studio 18 2026" -A x64 --preset windows-x64
+    # Configure for macos
     cmake --preset macos
-    cmake --build --preset macos
+
+    # Build for Windows
+    cmake --build --preset windows-x64
+
+    # Build for macOS
+    cd build_macos
+    xcodebuild  \
+     -configuration RelWithDebInfo \
+     -scheme obs-studio \
+     -parallelizeTargets \
+     -destination "generic/platform=macOS,name=Any Mac"
     ```
 
 3.  Configure the plugin:
