@@ -18,7 +18,7 @@ Prerequisites:
 *   C++ Compiler (Clang/GCC/MSVC)
 *   OBS Studio development libraries (libobs)
 *   [Fork of OBS-Studio](https://github.com/brianmed/obs-studio) just to show MoQ in the UI.
-*   XCode 16.3 / macOS 15
+*   XCode 26.1 / macOS 15.6
 
 1.  Clone the repos:
     ```bash

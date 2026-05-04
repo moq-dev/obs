@@ -22,19 +22,15 @@ cmake -G "Visual Studio 18 2026" -A x64 --preset windows-x64
 cmake --build --preset windows-x64
 ```
 
-### Build the obs-moq plugin
+### Build the obs-moq plugin and install
 
 ```powershell
 cd obs
-cmake -G "Visual Studio 18 2026" -A x64 --preset windows-x64
-cmake --build --preset windows-x64
+cmake -G "Visual Studio 18 2026" -A x64 --preset windows-x64 -DMOQ_LOCAL="../moq"
+cmake --build --preset windows-x64 --target install
 ```
 
-For now copy the build plugin libraries to the build obs fork
 
-```powershell
-Copy-Item -Path "build_x64/rundir/RelWithDebInfo/" -Destination "../obs-studio/build_x64/rundir/RelWithDebInfo/obs-plugins" -Recurse
-```
 
 ## Debugging Moq Plugin
- $env:RUST_LOG="debug"; $env:RUST_BACKTRACE=1; $env:OBS_LOG_LEVEL="debug"; .\obs64.exe -verbose
+ $env:RUST_LOG="debug"; $env:RUST_BACKTRACE=1; $env:OBS_LOG_LEVEL="debug"; Set-Location "build_x64\rundir\RelWithDebInfo\bin\64bit"; & .\obs64.exe --verbose
