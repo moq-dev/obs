@@ -16,8 +16,8 @@ add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:Swift>>:-fopenmp-simd>")
 
 # Ensure recent enough Xcode and platform SDK
 function(check_sdk_requirements)
-  set(obs_macos_minimum_sdk 15.4) # Keep in sync with Xcode
-  set(obs_macos_minimum_xcode 16.3) # Keep in sync with SDK
+  set(obs_macos_minimum_sdk 26.1) # Keep in sync with Xcode
+  set(obs_macos_minimum_xcode 26.1) # Keep in sync with SDK
   execute_process(
     COMMAND xcrun --sdk macosx --show-sdk-platform-version
     OUTPUT_VARIABLE obs_macos_current_sdk
