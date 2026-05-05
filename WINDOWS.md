@@ -33,4 +33,7 @@ cmake --build --preset windows-x64 --target install
 
 
 ## Debugging Moq Plugin
+
+```powershell
  $env:RUST_LOG="debug"; $env:RUST_BACKTRACE=1; $env:OBS_LOG_LEVEL="debug"; Set-Location "build_x64\rundir\RelWithDebInfo\bin\64bit"; & .\obs64.exe --verbose
+```
