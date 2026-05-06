@@ -10,6 +10,7 @@ struct MoQService {
     MoQService(obs_data_t *settings, obs_service_t *service);
 
     void Update(obs_data_t *settings);
+    static void Defaults(obs_data_t *settings);
     static obs_properties_t *Properties();
     static void ApplyEncoderSettings(obs_data_t *video_settings, obs_data_t *audio_settings);
     bool CanTryToConnect();

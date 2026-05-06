@@ -46,14 +46,17 @@ bool MoQOutput::Start()
 		return false;
 	}
 
-	server_url = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	const char *server_value = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	server_url = server_value ? server_value : "";
 	if (server_url.empty()) {
 		LOG_ERROR("Server URL is empty");
 		obs_output_signal_stop(output, OBS_OUTPUT_BAD_PATH);
 		return false;
 	}
 
-	path = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_STREAM_KEY);
+	// Path (broadcast name) is optional; an empty string publishes to the unnamed broadcast.
+	const char *path_value = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_STREAM_KEY);
+	path = path_value ? path_value : "";
 
 	bool found_encoder = false;
 	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {

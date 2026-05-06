@@ -11,8 +11,17 @@ MoQService::MoQService(obs_data_t *settings, obs_service_t *) : server(), path()
 
 void MoQService::Update(obs_data_t *settings)
 {
-	server = obs_data_get_string(settings, "server");
-	path = obs_data_get_string(settings, "key");
+	const char *server_value = obs_data_get_string(settings, "server");
+	const char *key_value = obs_data_get_string(settings, "key");
+
+	server = server_value ? server_value : "";
+	path = key_value ? key_value : "";
+}
+
+void MoQService::Defaults(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "server", "");
+	obs_data_set_default_string(settings, "key", "");
 }
 
 obs_properties_t *MoQService::Properties()
@@ -22,7 +31,7 @@ obs_properties_t *MoQService::Properties()
 	// Adds properties to be modified by the UI.
 	// obs_property_t *obs_properties_add_text(obs_properties_t *props, const char *name, const char *desc, enum obs_text_type type)
 	obs_properties_add_text(ppts, "server", "URL", OBS_TEXT_DEFAULT);
-	obs_properties_add_text(ppts, "key", "Path", OBS_TEXT_DEFAULT);
+	obs_properties_add_text(ppts, "key", "Path (optional)", OBS_TEXT_DEFAULT);
 
 	return ppts;
 }
@@ -83,6 +92,9 @@ void register_moq_service()
 	};
 	info.get_properties = [](void *) -> obs_properties_t * {
 		return MoQService::Properties();
+	};
+	info.get_defaults = [](obs_data_t *settings) {
+		MoQService::Defaults(settings);
 	};
 	info.get_protocol = [](void *) -> const char * {
 		return "MoQ";
