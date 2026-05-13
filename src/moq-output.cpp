@@ -83,8 +83,9 @@ bool MoQOutput::Start()
 				 self->server_url.c_str());
 		} else {
 			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
+			self->Stop(false);
 			// Add stop signal for connection failure
-			obs_output_signal_stop(output, OBS_OUTPUT_CONNECT_FAILED);
+			obs_output_signal_stop(self->output, OBS_OUTPUT_CONNECT_FAILED);
 		}
 	};
 
