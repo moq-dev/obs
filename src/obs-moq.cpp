@@ -26,6 +26,11 @@ extern "C" {
 #include "moq.h"
 }
 
+#ifdef _WIN64
+	#include <windows.h>
+	#include <cstring>
+#endif
+
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-moq", "en-US")
 MODULE_EXPORT const char *obs_module_description(void)
@@ -38,6 +43,13 @@ bool obs_module_load(void)
 	// Use RUST_LOG env var for more verbose output
 	// The second argument is the string length of the first argument.
 	moq_log_level("info", 4);
+
+	// Enable a debug console in Windows if the RUST_LOG env var is set to debug.
+	#ifdef _WIN64
+		const char* logLevel = std::getenv("RUST_LOG");
+		if (logLevel && strcmp(logLevel, "debug") == 0)
+			AllocConsole();
+	#endif
 
 	register_moq_output();
 	register_moq_service();
