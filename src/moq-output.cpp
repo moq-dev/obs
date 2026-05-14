@@ -87,11 +87,13 @@ bool MoQOutput::Start()
 			if (self->reconnecting)
 				os_atomic_set_bool(&self->reconnecting, false);
 		} else if (error_code == -2) {
+			//on swrver disconnection. Signal to attempt to reconnect
 			LOG_INFO("MoQ session disconnected (%d): %s", error_code, self->server_url.c_str());
 			obs_output_signal_stop(self->output, OBS_OUTPUT_DISCONNECTED);
 			os_atomic_set_bool(&self->reconnecting, true);
 		} else {
 			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
+			// signal connection failure and stop the broadcast
 			obs_output_signal_stop(self->output, OBS_OUTPUT_CONNECT_FAILED);
 			os_atomic_set_bool(&self->reconnecting, false);
 		}
