@@ -83,9 +83,6 @@ bool MoQOutput::Start()
 				 self->server_url.c_str());
 		} else {
 			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
-			self->Stop(false);
-			// Add stop signal for connection failure
-			obs_output_signal_stop(self->output, OBS_OUTPUT_CONNECT_FAILED);
 		}
 	};
 
@@ -94,8 +91,6 @@ bool MoQOutput::Start()
 	session = moq_session_connect(server_url.data(), server_url.size(), origin, 0, session_connect_callback, this);
 	if (session < 0) {
 		LOG_ERROR("Failed to initialize MoQ server: %d", session);
-		// Add stop signal for session error
-		obs_output_signal_stop(output, OBS_OUTPUT_ERROR);
 		return false;
 	}
 
@@ -106,8 +101,6 @@ bool MoQOutput::Start()
 	auto result = moq_origin_publish(origin, path.data(), path.size(), broadcast);
 	if (result < 0) {
 		LOG_ERROR("Failed to publish broadcast to session: %d", result);
-		// Add stop signal for publish error
-		obs_output_signal_stop(output, OBS_OUTPUT_ERROR);
 		return false;
 	}
 
