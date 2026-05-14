@@ -2,6 +2,7 @@
 
 #include "moq-output.h"
 #include "util/util_uint64.h"
+#include "util/threading.h"
 
 extern "C" {
 #include "moq.h"
@@ -15,7 +16,8 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  connect_time_ms(0),
 	  origin(moq_origin_create()),
 	  session(0),
-	  broadcast(moq_publish_create())
+	  broadcast(moq_publish_create()),
+	  reconnecting(false)
 {
 }
 
@@ -81,8 +83,17 @@ bool MoQOutput::Start()
 			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms,
 				 self->server_url.c_str());
+
+			if (self->reconnecting)
+				os_atomic_set_bool(&self->reconnecting, false);
+		} else if (error_code == -2) {
+			LOG_INFO("MoQ session disconnected (%d): %s", error_code, self->server_url.c_str());
+			obs_output_signal_stop(self->output, OBS_OUTPUT_DISCONNECTED);
+			os_atomic_set_bool(&self->reconnecting, true);
 		} else {
 			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
+			obs_output_signal_stop(self->output, OBS_OUTPUT_CONNECT_FAILED);
+			os_atomic_set_bool(&self->reconnecting, false);
 		}
 	};
 
