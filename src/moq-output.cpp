@@ -146,7 +146,7 @@ void MoQOutput::Stop(bool signal)
 		obs_output_signal_stop(output, OBS_OUTPUT_SUCCESS);
 	}
 
-	os_atomic_set_bool(&self->reconnecting, false);
+	os_atomic_set_bool(&reconnecting, false);
 
 	return;
 }
