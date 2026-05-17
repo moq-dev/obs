@@ -22,7 +22,7 @@ obs_properties_t *MoQService::Properties()
 	// Adds properties to be modified by the UI.
 	// obs_property_t *obs_properties_add_text(obs_properties_t *props, const char *name, const char *desc, enum obs_text_type type)
 	obs_properties_add_text(ppts, "server", "URL", OBS_TEXT_DEFAULT);
-	obs_properties_add_text(ppts, "key", "Path", OBS_TEXT_DEFAULT);
+	obs_properties_add_text(ppts, "key", "Path (optional)", OBS_TEXT_DEFAULT);
 
 	return ppts;
 }
