@@ -46,6 +46,8 @@ class MoQOutput
     int broadcast;
     std::map<obs_encoder_t *, int> video_tracks;
     std::map<obs_encoder_t *, int> audio_tracks;
+
+    volatile bool reconnecting;
 };
 
 void register_moq_output();
