@@ -788,7 +788,7 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 
 	// Get frame data
 	struct moq_frame frame_data;
-	if (moq_consume_frame_chunk(frame_id, 0, &frame_data) < 0) {
+	if (moq_consume_frame(frame_id, &frame_data) < 0) {
 		LOG_ERROR("Failed to get frame data");
 		pthread_mutex_unlock(&ctx->mutex);
 		moq_consume_frame_close(frame_id);
