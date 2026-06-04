@@ -15,8 +15,27 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  connect_time_ms(0),
 	  origin(moq_origin_create()),
 	  session(0),
-	  broadcast(moq_publish_create())
+	  broadcast(moq_publish_create()),
+	  broadcast_published(false)
 {
+}
+
+bool MoQOutput::PublishBroadcast()
+{
+	if (broadcast_published) {
+		return true;
+	}
+
+	LOG_INFO("Publishing broadcast: %s", path.c_str());
+
+	auto result = moq_origin_publish(origin, path.data(), path.size(), broadcast);
+	if (result < 0) {
+		LOG_ERROR("Failed to publish broadcast to session: %d", result);
+		return false;
+	}
+
+	broadcast_published = true;
+	return true;
 }
 
 MoQOutput::~MoQOutput()
@@ -80,6 +99,11 @@ bool MoQOutput::Start()
 		auto self = static_cast<MoQOutput *>(user_data);
 
 		if (error_code == 0) {
+			if (!self->PublishBroadcast()) {
+				obs_output_signal_stop(self->output, OBS_OUTPUT_ERROR);
+				return;
+			}
+
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
 			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms,
@@ -94,16 +118,6 @@ bool MoQOutput::Start()
 	session = moq_session_connect(server_url.data(), server_url.size(), origin, 0, session_connect_callback, this);
 	if (session < 0) {
 		LOG_ERROR("Failed to initialize MoQ server: %d", session);
-		return false;
-	}
-
-	LOG_INFO("Publishing broadcast: %s", path.c_str());
-
-	// Publish the broadcast to the origin we created.
-	// TODO: There is currently no unpublish function.
-	auto result = moq_origin_publish(origin, path.data(), path.size(), broadcast);
-	if (result < 0) {
-		LOG_ERROR("Failed to publish broadcast to session: %d", result);
 		return false;
 	}
 
