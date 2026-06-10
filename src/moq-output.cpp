@@ -1,10 +1,41 @@
 #include <obs.hpp>
 
+#include <vector>
+
 #include "moq-output.h"
 #include "util/util_uint64.h"
 
 extern "C" {
 #include "moq.h"
+}
+
+// Does the head of this Annex B H.264 keyframe already carry an SPS NAL (type 7)?
+// Parameter sets always precede the IDR slice when present, so stop scanning at
+// the first slice NAL.
+static bool annexb_has_sps(const uint8_t *data, size_t size)
+{
+	for (size_t i = 0; i + 4 < size;) {
+		if (data[i] != 0x00 || data[i + 1] != 0x00) {
+			i++;
+			continue;
+		}
+		size_t hdr;
+		if (data[i + 2] == 0x01) {
+			hdr = 3;
+		} else if (data[i + 2] == 0x00 && data[i + 3] == 0x01) {
+			hdr = 4;
+		} else {
+			i++;
+			continue;
+		}
+		uint8_t nal_type = data[i + hdr] & 0x1f;
+		if (nal_type == 7)
+			return true;
+		if (nal_type == 1 || nal_type == 5)
+			return false;
+		i += hdr + 1;
+	}
+	return false;
 }
 
 MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
@@ -94,11 +125,15 @@ bool MoQOutput::Start()
 
 	connect_start = std::chrono::steady_clock::now();
 
-	// Create a callback to log when the session is connected or closed
+	// libmoq 0.3.x status callback semantics: a POSITIVE code is the connection
+	// epoch (1 = first connect, >1 = reconnect after a drop), 0 is the terminal
+	// clean close, and negative codes are terminal errors. (0.2.x used 0 for
+	// "connected", which is why the old build logged established/closed inverted
+	// and published the broadcast at stop instead of at connect.)
 	auto session_connect_callback = [](void *user_data, int error_code) {
 		auto self = static_cast<MoQOutput *>(user_data);
 
-		if (error_code == 0) {
+		if (error_code > 0) {
 			if (!self->PublishBroadcast()) {
 				obs_output_signal_stop(self->output, OBS_OUTPUT_ERROR);
 				return;
@@ -106,10 +141,12 @@ bool MoQOutput::Start()
 
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
 			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms,
+			LOG_INFO("MoQ session connected (epoch %d, %d ms): %s", error_code, self->connect_time_ms,
 				 self->server_url.c_str());
+		} else if (error_code == 0) {
+			LOG_INFO("MoQ session closed cleanly: %s", self->server_url.c_str());
 		} else {
-			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
+			LOG_INFO("MoQ session failed (%d): %s", error_code, self->server_url.c_str());
 		}
 	};
 
@@ -139,6 +176,7 @@ void MoQOutput::Stop(bool signal)
 			moq_publish_media_close(handle);
 	}
 	video_tracks.clear();
+	video_init_attempts.clear();
 
 	for (auto &[encoder, handle] : audio_tracks) {
 		if (handle > 0)
@@ -225,7 +263,35 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 
 	auto pts_us = util_mul_div64(pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
 
-	auto result = moq_publish_media_frame(handle, packet->data, packet->size, pts_us);
+	const uint8_t *payload = packet->data;
+	size_t payload_size = packet->size;
+
+	// The catalog publishes no out-of-band decoder description, so H.264/H.265
+	// keyframes must carry their parameter sets in-band for viewers to start
+	// decoding (WebCodecs rejects every frame otherwise). Encoders don't repeat
+	// headers by default, so prepend the encoder's extra data (Annex B SPS/PPS)
+	// to any keyframe that lacks them.
+	std::vector<uint8_t> with_headers;
+	if (packet->keyframe) {
+		const char *codec = obs_encoder_get_codec(encoder);
+		bool is_h264 = codec && strcmp(codec, "h264") == 0;
+		bool is_hevc = codec && strcmp(codec, "hevc") == 0;
+		// The SPS scan is H.264-specific; for HEVC prepend unconditionally
+		// (decoders tolerate repeated parameter sets).
+		if ((is_h264 && !annexb_has_sps(packet->data, packet->size)) || is_hevc) {
+			uint8_t *extra = nullptr;
+			size_t extra_size = 0;
+			if (obs_encoder_get_extra_data(encoder, &extra, &extra_size) && extra_size > 0) {
+				with_headers.reserve(extra_size + packet->size);
+				with_headers.insert(with_headers.end(), extra, extra + extra_size);
+				with_headers.insert(with_headers.end(), packet->data, packet->data + packet->size);
+				payload = with_headers.data();
+				payload_size = with_headers.size();
+			}
+		}
+	}
+
+	auto result = moq_publish_media_frame(handle, payload, payload_size, pts_us);
 	if (result < 0) {
 		LOG_ERROR("Failed to write video frame: %d", result);
 		return;
@@ -254,16 +320,38 @@ void MoQOutput::VideoInit(obs_encoder_t *encoder)
 	auto video_height = obs_encoder_get_height(encoder);
 	*/
 
-	uint8_t *extra_data = nullptr;
-	size_t extra_size = 0;
-
-	// obs_encoder_get_extra_data may only return data after the first frame has been encoded.
-	// For H.264, this returns the SPS/PPS
-	if (!obs_encoder_get_extra_data(encoder, &extra_data, &extra_size)) {
-		LOG_WARNING("Failed to get extra data");
+	const char *codec = obs_encoder_get_codec(encoder);
+	if (!codec) {
+		LOG_ERROR("Failed to get video codec");
+		return;
 	}
 
-	const char *codec = obs_encoder_get_codec(encoder);
+	uint8_t *extra_data = nullptr;
+	size_t extra_size = 0;
+	obs_encoder_get_extra_data(encoder, &extra_data, &extra_size);
+
+	// H.264/H.265 carry their parameter sets (SPS/PPS) out-of-band in the encoder's
+	// "extra data", which is only populated after the first frame has been encoded.
+	// These become the decoder `description` in the catalog; without them the browser's
+	// VideoDecoder rejects every frame ("a key frame is required after configure()...
+	// you must fill out the description field in the VideoDecoderConfig"). If they
+	// aren't ready yet, leave the track uninitialized so VideoData retries on the next
+	// packet, once the encoder has produced them. (AV1 is excluded: it carries its
+	// sequence header in-band and doesn't depend on this out-of-band extra data.)
+	bool needs_headers = (strcmp(codec, "h264") == 0) || (strcmp(codec, "hevc") == 0);
+	if (needs_headers && extra_size == 0) {
+		// Bound the retry so a genuinely broken encoder surfaces an error instead of
+		// silently dropping video forever.
+		int attempts = ++video_init_attempts[encoder];
+		const int max_attempts = 30; // ~1s at 30fps; headers normally arrive within 1-2 frames
+		if (attempts <= max_attempts) {
+			LOG_WARNING("Video codec headers (SPS/PPS) not ready yet; deferring track init (attempt %d)", attempts);
+			return;
+		}
+		LOG_ERROR("Video codec headers (SPS/PPS) still missing after %d attempts; publishing track without them (video may fail to decode)",
+			  attempts);
+	}
+	video_init_attempts.erase(encoder);
 
 	// Transform codec string for MoQ
 	const char *moq_codec = codec;

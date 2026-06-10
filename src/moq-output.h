@@ -48,6 +48,10 @@ class MoQOutput
     bool broadcast_published;
     std::map<obs_encoder_t *, int> video_tracks;
     std::map<obs_encoder_t *, int> audio_tracks;
+    // Per-encoder count of deferred VideoInit attempts while waiting for the encoder's
+    // codec headers (SPS/PPS), so a broken encoder surfaces an error instead of
+    // silently dropping video forever.
+    std::map<obs_encoder_t *, int> video_init_attempts;
 };
 
 void register_moq_output();
