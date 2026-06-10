@@ -125,15 +125,21 @@ bool MoQOutput::Start()
 
 	connect_start = std::chrono::steady_clock::now();
 
-	// libmoq 0.3.x status callback semantics: a POSITIVE code is the connection
-	// epoch (1 = first connect, >1 = reconnect after a drop), 0 is the terminal
-	// clean close, and negative codes are terminal errors. (0.2.x used 0 for
-	// "connected", which is why the old build logged established/closed inverted
-	// and published the broadcast at stop instead of at connect.)
+	session_connected = false;
+
+	// The status callback convention differs across libmoq versions:
+	// - 0.2.x: 0 = connected, nonzero = closed/error.
+	// - 0.3.x: positive = connection epoch (1 = first connect, >1 = reconnect),
+	//   0 = terminal clean close, negative = terminal error.
+	// Treat the FIRST non-negative callback as "connected" so the broadcast is
+	// published at connect time under either convention; afterwards, 0 means a
+	// clean close (0.3.x) and negative codes are errors in both.
 	auto session_connect_callback = [](void *user_data, int error_code) {
 		auto self = static_cast<MoQOutput *>(user_data);
 
-		if (error_code > 0) {
+		if (error_code >= 0 && !self->session_connected) {
+			self->session_connected = true;
+
 			if (!self->PublishBroadcast()) {
 				obs_output_signal_stop(self->output, OBS_OUTPUT_ERROR);
 				return;
@@ -141,8 +147,11 @@ bool MoQOutput::Start()
 
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
 			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-			LOG_INFO("MoQ session connected (epoch %d, %d ms): %s", error_code, self->connect_time_ms,
+			LOG_INFO("MoQ session connected (status %d, %d ms): %s", error_code, self->connect_time_ms,
 				 self->server_url.c_str());
+		} else if (error_code > 0) {
+			// 0.3.x reconnect epoch; the broadcast publish is latched, so just log.
+			LOG_INFO("MoQ session reconnected (epoch %d): %s", error_code, self->server_url.c_str());
 		} else if (error_code == 0) {
 			LOG_INFO("MoQ session closed cleanly: %s", self->server_url.c_str());
 		} else {

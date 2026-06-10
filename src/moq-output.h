@@ -46,6 +46,9 @@ class MoQOutput
     int session;
     int broadcast;
     bool broadcast_published;
+    // Set once the session status callback first reports a non-negative code;
+    // distinguishes "connected" from "closed" across libmoq callback conventions.
+    bool session_connected = false;
     std::map<obs_encoder_t *, int> video_tracks;
     std::map<obs_encoder_t *, int> audio_tracks;
     // Per-encoder count of deferred VideoInit attempts while waiting for the encoder's
