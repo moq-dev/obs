@@ -142,6 +142,7 @@ bool MoQOutput::Start()
 		return false;
 	}
 
+	output_active = true;
 	obs_output_begin_data_capture(output, 0);
 
 	return true;
@@ -149,6 +150,11 @@ bool MoQOutput::Start()
 
 void MoQOutput::Stop(bool signal)
 {
+	// Stop accepting encoder packets before tearing anything down; late packets
+	// would otherwise re-create tracks mid-teardown and poison the next session.
+	output_active = false;
+	obs_output_end_data_capture(output);
+
 	// Close the session
 	if (session > 0) {
 		moq_session_close(session);
@@ -177,6 +183,10 @@ void MoQOutput::Stop(bool signal)
 
 void MoQOutput::Data(struct encoder_packet *packet)
 {
+	if (!output_active) {
+		return;
+	}
+
 	if (!packet) {
 		Stop(false);
 		obs_output_signal_stop(output, OBS_OUTPUT_ENCODE_ERROR);

@@ -49,6 +49,10 @@ class MoQOutput
     // Set once the session status callback first reports a non-negative code;
     // distinguishes "connected" from "closed" across libmoq callback conventions.
     bool session_connected = false;
+    // True between Start() and Stop(). Late encoder packets delivered during
+    // teardown must not re-create tracks: those zombie tracks survive in the
+    // maps and the next session reuses them instead of initializing fresh ones.
+    bool output_active = false;
     std::map<obs_encoder_t *, int> video_tracks;
     std::map<obs_encoder_t *, int> audio_tracks;
     // Per-encoder count of deferred VideoInit attempts while waiting for the encoder's
