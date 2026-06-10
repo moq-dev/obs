@@ -1,41 +1,10 @@
 #include <obs.hpp>
 
-#include <vector>
-
 #include "moq-output.h"
 #include "util/util_uint64.h"
 
 extern "C" {
 #include "moq.h"
-}
-
-// Does the head of this Annex B H.264 keyframe already carry an SPS NAL (type 7)?
-// Parameter sets always precede the IDR slice when present, so stop scanning at
-// the first slice NAL.
-static bool annexb_has_sps(const uint8_t *data, size_t size)
-{
-	for (size_t i = 0; i + 4 < size;) {
-		if (data[i] != 0x00 || data[i + 1] != 0x00) {
-			i++;
-			continue;
-		}
-		size_t hdr;
-		if (data[i + 2] == 0x01) {
-			hdr = 3;
-		} else if (data[i + 2] == 0x00 && data[i + 3] == 0x01) {
-			hdr = 4;
-		} else {
-			i++;
-			continue;
-		}
-		uint8_t nal_type = data[i + hdr] & 0x1f;
-		if (nal_type == 7)
-			return true;
-		if (nal_type == 1 || nal_type == 5)
-			return false;
-		i += hdr + 1;
-	}
-	return false;
 }
 
 MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
@@ -272,35 +241,7 @@ void MoQOutput::VideoData(struct encoder_packet *packet)
 
 	auto pts_us = util_mul_div64(pts, 1000000ULL * packet->timebase_num, packet->timebase_den);
 
-	const uint8_t *payload = packet->data;
-	size_t payload_size = packet->size;
-
-	// The catalog publishes no out-of-band decoder description, so H.264/H.265
-	// keyframes must carry their parameter sets in-band for viewers to start
-	// decoding (WebCodecs rejects every frame otherwise). Encoders don't repeat
-	// headers by default, so prepend the encoder's extra data (Annex B SPS/PPS)
-	// to any keyframe that lacks them.
-	std::vector<uint8_t> with_headers;
-	if (packet->keyframe) {
-		const char *codec = obs_encoder_get_codec(encoder);
-		bool is_h264 = codec && strcmp(codec, "h264") == 0;
-		bool is_hevc = codec && strcmp(codec, "hevc") == 0;
-		// The SPS scan is H.264-specific; for HEVC prepend unconditionally
-		// (decoders tolerate repeated parameter sets).
-		if ((is_h264 && !annexb_has_sps(packet->data, packet->size)) || is_hevc) {
-			uint8_t *extra = nullptr;
-			size_t extra_size = 0;
-			if (obs_encoder_get_extra_data(encoder, &extra, &extra_size) && extra_size > 0) {
-				with_headers.reserve(extra_size + packet->size);
-				with_headers.insert(with_headers.end(), extra, extra + extra_size);
-				with_headers.insert(with_headers.end(), packet->data, packet->data + packet->size);
-				payload = with_headers.data();
-				payload_size = with_headers.size();
-			}
-		}
-	}
-
-	auto result = moq_publish_media_frame(handle, payload, payload_size, pts_us);
+	auto result = moq_publish_media_frame(handle, packet->data, packet->size, pts_us);
 	if (result < 0) {
 		LOG_ERROR("Failed to write video frame: %d", result);
 		return;
