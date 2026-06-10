@@ -122,9 +122,15 @@ bool MoQOutput::Start()
 			// 0.3.x reconnect epoch; the broadcast publish is latched, so just log.
 			LOG_INFO("MoQ session reconnected (epoch %d): %s", error_code, self->server_url.c_str());
 		} else if (error_code == 0) {
+			// Terminal clean close: the response to our own moq_session_close()
+			// in Stop(), which already signals OBS — don't signal again.
 			LOG_INFO("MoQ session closed cleanly: %s", self->server_url.c_str());
 		} else {
-			LOG_INFO("MoQ session failed (%d): %s", error_code, self->server_url.c_str());
+			// Terminal failure: libmoq's internal reconnect loop gave up. Tell
+			// OBS the connection is gone so its reconnect/stop handling runs
+			// instead of streaming into a dead session.
+			LOG_ERROR("MoQ session failed (%d): %s", error_code, self->server_url.c_str());
+			obs_output_signal_stop(self->output, OBS_OUTPUT_DISCONNECTED);
 		}
 	};
 
