@@ -10,8 +10,8 @@
       "name": "template",
       "hidden": true,
       "cacheVariables": {
-        "ENABLE_FRONTEND_API": false,
-        "ENABLE_QT": false,
+        "ENABLE_FRONTEND_API": true,
+        "ENABLE_QT": true,
         "CMAKE_EXPORT_COMPILE_COMMANDS": true,
         "BUILD_PLUGIN": true,
         "MOQ_VERSION": "0.2.14",
