@@ -22,6 +22,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "moq-service.h"
 #include "moq-source.h"
 
+#ifdef MOQ_FRONTEND_ENABLED
+#include "moq-dock.h"
+#endif
+
 extern "C" {
 #include "moq.h"
 }
@@ -42,6 +46,10 @@ bool obs_module_load(void)
 	register_moq_output();
 	register_moq_service();
 	register_moq_source();
+
+#ifdef MOQ_FRONTEND_ENABLED
+	register_moq_dock();
+#endif
 
 	return true;
 }

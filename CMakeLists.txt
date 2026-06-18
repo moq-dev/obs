@@ -46,6 +46,35 @@ else()
   target_link_libraries(obs-moq PRIVATE moq::moq)
 endif()
 
+# The obs-deps Qt6 build references the AGL framework transitively (via
+# WrapOpenGL), but recent macOS SDKs ship no linkable AGL binary -- it exists
+# only in the runtime dyld shared cache. Generate a stub whose install name
+# points at the real framework so the link succeeds; dyld resolves AGL at load.
+if((ENABLE_QT OR ENABLE_FRONTEND_API)
+   AND APPLE
+   AND NOT EXISTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/AGL.framework/Versions/A/AGL"
+)
+  set(_agl_stub_dir "${CMAKE_BINARY_DIR}/agl-stub")
+  set(_agl_stub_lib "${_agl_stub_dir}/AGL.framework/AGL")
+  if(NOT EXISTS "${_agl_stub_lib}")
+    file(MAKE_DIRECTORY "${_agl_stub_dir}/AGL.framework")
+    set(_agl_arch_flags "")
+    foreach(_arch IN LISTS CMAKE_OSX_ARCHITECTURES)
+      list(APPEND _agl_arch_flags "-arch" "${_arch}")
+    endforeach()
+    execute_process(
+      COMMAND
+        xcrun clang -dynamiclib ${_agl_arch_flags} -install_name
+        /System/Library/Frameworks/AGL.framework/Versions/A/AGL -o "${_agl_stub_lib}" -x c /dev/null
+      RESULT_VARIABLE _agl_stub_result
+    )
+    if(NOT _agl_stub_result EQUAL 0)
+      message(WARNING "Failed to build AGL stub (${_agl_stub_result}); Qt link may fail")
+    endif()
+  endif()
+  target_link_options(obs-moq PRIVATE "-F${_agl_stub_dir}")
+endif()
+
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
   target_link_libraries(obs-moq PRIVATE OBS::obs-frontend-api)
@@ -75,6 +104,12 @@ target_sources(
     src/moq-source.cpp
     src/moq-source.h
 )
+
+# The dock requires both the frontend API (to register it) and Qt (to build it).
+if(ENABLE_FRONTEND_API AND ENABLE_QT)
+  target_sources(obs-moq PRIVATE src/moq-dock.cpp src/moq-dock.h)
+  target_compile_definitions(obs-moq PRIVATE MOQ_FRONTEND_ENABLED MOQ_VERSION_STRING="${MOQ_VERSION}")
+endif()
 
 if(${BUILD_PLUGIN})
   set_target_properties_plugin(obs-moq PROPERTIES OUTPUT_NAME ${_name})
