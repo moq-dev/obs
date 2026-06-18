@@ -28,28 +28,23 @@ static AVCodecID codec_string_to_id(const char *codec, size_t len)
 	}
 
 	// H.264/AVC
-	if ((len >= 4 && strncasecmp(codec, "h264", 4) == 0) ||
-	    (len >= 3 && strncasecmp(codec, "avc", 3) == 0)) {
+	if ((len >= 4 && strncasecmp(codec, "h264", 4) == 0) || (len >= 3 && strncasecmp(codec, "avc", 3) == 0)) {
 		return AV_CODEC_ID_H264;
 	}
 
 	// HEVC/H.265
-	if ((len >= 4 && strncasecmp(codec, "hevc", 4) == 0) ||
-	    (len >= 4 && strncasecmp(codec, "h265", 4) == 0) ||
-	    (len >= 4 && strncasecmp(codec, "hev1", 4) == 0) ||
-	    (len >= 4 && strncasecmp(codec, "hvc1", 4) == 0)) {
+	if ((len >= 4 && strncasecmp(codec, "hevc", 4) == 0) || (len >= 4 && strncasecmp(codec, "h265", 4) == 0) ||
+	    (len >= 4 && strncasecmp(codec, "hev1", 4) == 0) || (len >= 4 && strncasecmp(codec, "hvc1", 4) == 0)) {
 		return AV_CODEC_ID_HEVC;
 	}
 
 	// VP9
-	if ((len >= 3 && strncasecmp(codec, "vp9", 3) == 0) ||
-	    (len >= 4 && strncasecmp(codec, "vp09", 4) == 0)) {
+	if ((len >= 3 && strncasecmp(codec, "vp9", 3) == 0) || (len >= 4 && strncasecmp(codec, "vp09", 4) == 0)) {
 		return AV_CODEC_ID_VP9;
 	}
 
 	// AV1
-	if ((len >= 3 && strncasecmp(codec, "av1", 3) == 0) ||
-	    (len >= 4 && strncasecmp(codec, "av01", 4) == 0)) {
+	if ((len >= 3 && strncasecmp(codec, "av1", 3) == 0) || (len >= 4 && strncasecmp(codec, "av01", 4) == 0)) {
 		return AV_CODEC_ID_AV1;
 	}
 
@@ -72,8 +67,8 @@ struct moq_source {
 	std::atomic<bool> shutting_down;
 
 	// Session handles (all negative = invalid)
-	std::atomic<uint32_t> generation;  // Increments on reconnect
-	bool reconnect_in_progress;    // True while reconnect is happening
+	std::atomic<uint32_t> generation; // Increments on reconnect
+	bool reconnect_in_progress;       // True while reconnect is happening
 	int32_t origin;
 	int32_t session;
 	int32_t consume;
@@ -82,12 +77,12 @@ struct moq_source {
 
 	// Decoder state
 	AVCodecContext *codec_ctx;
-	AVCodecID current_codec_id;            // Currently configured codec
-	enum AVPixelFormat current_pix_fmt;    // Current pixel format for sws_ctx
+	AVCodecID current_codec_id;         // Currently configured codec
+	enum AVPixelFormat current_pix_fmt; // Current pixel format for sws_ctx
 	struct SwsContext *sws_ctx;
 	bool got_keyframe;
-	uint32_t frames_waiting_for_keyframe;  // Count of skipped frames while waiting
-	uint32_t consecutive_decode_errors;    // Count of consecutive decode failures
+	uint32_t frames_waiting_for_keyframe; // Count of skipped frames while waiting
+	uint32_t consecutive_decode_errors;   // Count of consecutive decode failures
 
 	// Output frame buffer
 	struct obs_source_frame frame;
@@ -204,12 +199,11 @@ static void moq_source_update(void *data, obs_data_t *settings)
 	pthread_mutex_lock(&ctx->mutex);
 
 	// Check if settings actually changed
-	bool url_changed = (!ctx->url && url && strlen(url) > 0) ||
-	                   (ctx->url && !url) ||
-	                   (ctx->url && url && strcmp(ctx->url, url) != 0);
+	bool url_changed = (!ctx->url && url && strlen(url) > 0) || (ctx->url && !url) ||
+			   (ctx->url && url && strcmp(ctx->url, url) != 0);
 	bool broadcast_changed = (!ctx->broadcast && broadcast && strlen(broadcast) > 0) ||
-	                         (ctx->broadcast && !broadcast) ||
-	                         (ctx->broadcast && broadcast && strcmp(ctx->broadcast, broadcast) != 0);
+				 (ctx->broadcast && !broadcast) ||
+				 (ctx->broadcast && broadcast && strcmp(ctx->broadcast, broadcast) != 0);
 	bool settings_changed = url_changed || broadcast_changed;
 
 	// Store the new settings
@@ -219,15 +213,14 @@ static void moq_source_update(void *data, obs_data_t *settings)
 	ctx->broadcast = bstrdup(broadcast);
 
 	// Check if new settings are valid for connection
-	bool valid = ctx->url && ctx->broadcast &&
-	             strlen(ctx->url) > 0 && strlen(ctx->broadcast) > 0;
+	bool valid = ctx->url && ctx->broadcast && strlen(ctx->url) > 0 && strlen(ctx->broadcast) > 0;
 
 	pthread_mutex_unlock(&ctx->mutex);
 
 	// If settings changed and are valid, reconnect
 	if (settings_changed && valid) {
-		LOG_INFO("Settings changed, reconnecting (url=%s, broadcast=%s)",
-		         url ? url : "(null)", broadcast ? broadcast : "(null)");
+		LOG_INFO("Settings changed, reconnecting (url=%s, broadcast=%s)", url ? url : "(null)",
+			 broadcast ? broadcast : "(null)");
 		moq_source_reconnect(ctx);
 	} else if (settings_changed && !valid) {
 		LOG_INFO("Settings changed but invalid - disconnecting");
@@ -468,12 +461,10 @@ static void moq_source_reconnect(struct moq_source *ctx)
 	}
 
 	// Connect to MoQ server (consume will happen in on_session_status callback)
-	int32_t new_session = moq_session_connect(
-		url_copy, strlen(url_copy),
-		0, // origin_publish
-		new_origin, // origin_consume
-		on_session_status, ctx
-	);
+	int32_t new_session = moq_session_connect(url_copy, strlen(url_copy),
+						  0,          // origin_publish
+						  new_origin, // origin_consume
+						  on_session_status, ctx);
 	bfree(url_copy);
 
 	if (new_session < 0) {
@@ -669,7 +660,8 @@ static bool moq_source_init_decoder(struct moq_source *ctx, const struct moq_vid
 
 	// Use codec description as extradata (contains SPS/PPS for H.264, VPS/SPS/PPS for HEVC, etc.)
 	if (config->description && config->description_len > 0) {
-		new_codec_ctx->extradata = (uint8_t *)av_mallocz(config->description_len + AV_INPUT_BUFFER_PADDING_SIZE);
+		new_codec_ctx->extradata =
+			(uint8_t *)av_mallocz(config->description_len + AV_INPUT_BUFFER_PADDING_SIZE);
 		if (new_codec_ctx->extradata) {
 			memcpy(new_codec_ctx->extradata, config->description, config->description_len);
 			new_codec_ctx->extradata_size = static_cast<int>(config->description_len);
@@ -711,9 +703,9 @@ static bool moq_source_init_decoder(struct moq_source *ctx, const struct moq_vid
 	// dynamically on first decoded frame when we know the actual pixel format
 	ctx->codec_ctx = new_codec_ctx;
 	ctx->current_codec_id = codec_id;
-	ctx->current_pix_fmt = AV_PIX_FMT_NONE;  // Will be set on first frame
-	ctx->sws_ctx = NULL;  // Will be created on first frame with actual pixel format
-	ctx->frame_buffer = NULL;  // Will be allocated on first frame with actual dimensions
+	ctx->current_pix_fmt = AV_PIX_FMT_NONE; // Will be set on first frame
+	ctx->sws_ctx = NULL;                    // Will be created on first frame with actual pixel format
+	ctx->frame_buffer = NULL;               // Will be allocated on first frame with actual dimensions
 	ctx->frame.width = width;
 	ctx->frame.height = height;
 	ctx->frame.linesize[0] = width * 4;
@@ -732,8 +724,8 @@ static bool moq_source_init_decoder(struct moq_source *ctx, const struct moq_vid
 	if (config->codec && copy_len > 0) {
 		memcpy(codec_str, config->codec, copy_len);
 	}
-	LOG_INFO("Decoder initialized: codec=%s, dimensions=%ux%u (may be refined on first frame)",
-	         codec_str, width, height);
+	LOG_INFO("Decoder initialized: codec=%s, dimensions=%ux%u (may be refined on first frame)", codec_str, width,
+		 height);
 	return true;
 }
 
@@ -798,10 +790,9 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 	// Skip non-keyframes until we get the first one
 	if (!ctx->got_keyframe && !frame_data.keyframe) {
 		ctx->frames_waiting_for_keyframe++;
-		if (ctx->frames_waiting_for_keyframe == 1 ||
-		    (ctx->frames_waiting_for_keyframe % 30) == 0) {
+		if (ctx->frames_waiting_for_keyframe == 1 || (ctx->frames_waiting_for_keyframe % 30) == 0) {
 			LOG_INFO("Waiting for keyframe... (skipped %u frames so far)",
-			         ctx->frames_waiting_for_keyframe);
+				 ctx->frames_waiting_for_keyframe);
 		}
 		pthread_mutex_unlock(&ctx->mutex);
 		moq_consume_frame_close(frame_id);
@@ -812,7 +803,7 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 	if (frame_data.keyframe) {
 		if (!ctx->got_keyframe) {
 			LOG_INFO("Got keyframe after waiting for %u frames, payload_size=%zu",
-			         ctx->frames_waiting_for_keyframe, frame_data.payload_size);
+				 ctx->frames_waiting_for_keyframe, frame_data.payload_size);
 			// Flush decoder to ensure clean state when starting from keyframe
 			avcodec_flush_buffers(ctx->codec_ctx);
 		}
@@ -847,7 +838,7 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 			// If too many consecutive errors, flush decoder and wait for next keyframe
 			if (ctx->consecutive_decode_errors >= 5) {
 				LOG_WARNING("Too many send errors (%u), flushing decoder and waiting for keyframe",
-				            ctx->consecutive_decode_errors);
+					    ctx->consecutive_decode_errors);
 				avcodec_flush_buffers(ctx->codec_ctx);
 				ctx->got_keyframe = false;
 				ctx->consecutive_decode_errors = 0;
@@ -878,7 +869,7 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 			// If too many consecutive errors, flush decoder and wait for next keyframe
 			if (ctx->consecutive_decode_errors >= 5) {
 				LOG_WARNING("Too many decode errors (%u), flushing decoder and waiting for keyframe",
-				            ctx->consecutive_decode_errors);
+					    ctx->consecutive_decode_errors);
 				avcodec_flush_buffers(ctx->codec_ctx);
 				ctx->got_keyframe = false;
 				ctx->consecutive_decode_errors = 0;
@@ -904,18 +895,18 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 
 	if (need_reinit) {
 		if (dimensions_changed) {
-			LOG_INFO("Decoded frame dimensions changed: %ux%u -> %dx%d",
-			         ctx->frame.width, ctx->frame.height, frame->width, frame->height);
+			LOG_INFO("Decoded frame dimensions changed: %ux%u -> %dx%d", ctx->frame.width,
+				 ctx->frame.height, frame->width, frame->height);
 		}
 		if (pix_fmt_changed) {
-			LOG_INFO("Decoded frame pixel format changed: %d -> %d (%s)",
-			         ctx->current_pix_fmt, decoded_pix_fmt,
-			         av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
+			LOG_INFO("Decoded frame pixel format changed: %d -> %d (%s)", ctx->current_pix_fmt,
+				 decoded_pix_fmt,
+				 av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt)
+								      : "unknown");
 		}
 
 		// Validate that dimensions are positive and reasonable
-		if (frame->width <= 0 || frame->height <= 0 ||
-		    frame->width > 16384 || frame->height > 16384) {
+		if (frame->width <= 0 || frame->height <= 0 || frame->width > 16384 || frame->height > 16384) {
 			LOG_ERROR("Invalid decoded frame dimensions: %dx%d", frame->width, frame->height);
 			av_frame_free(&frame);
 			pthread_mutex_unlock(&ctx->mutex);
@@ -939,15 +930,14 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 		}
 
 		// Create new scaling context with the actual pixel format from the decoded frame
-		struct SwsContext *new_sws_ctx = sws_getContext(
-			frame->width, frame->height, decoded_pix_fmt,
-			frame->width, frame->height, AV_PIX_FMT_RGBA,
-			SWS_BILINEAR, NULL, NULL, NULL
-		);
+		struct SwsContext *new_sws_ctx = sws_getContext(frame->width, frame->height, decoded_pix_fmt,
+								frame->width, frame->height, AV_PIX_FMT_RGBA,
+								SWS_BILINEAR, NULL, NULL, NULL);
 		if (!new_sws_ctx) {
-			LOG_ERROR("Failed to create scaling context for %dx%d pix_fmt=%d (%s)",
-			          frame->width, frame->height, decoded_pix_fmt,
-			          av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
+			LOG_ERROR("Failed to create scaling context for %dx%d pix_fmt=%d (%s)", frame->width,
+				  frame->height, decoded_pix_fmt,
+				  av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt)
+								       : "unknown");
 			av_frame_free(&frame);
 			pthread_mutex_unlock(&ctx->mutex);
 			moq_consume_frame_close(frame_id);
@@ -958,8 +948,8 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 		size_t new_buffer_size = (size_t)frame->width * (size_t)frame->height * 4;
 		uint8_t *new_frame_buffer = (uint8_t *)bmalloc(new_buffer_size);
 		if (!new_frame_buffer) {
-			LOG_ERROR("Failed to allocate frame buffer for %dx%d (%zu bytes)",
-			          frame->width, frame->height, new_buffer_size);
+			LOG_ERROR("Failed to allocate frame buffer for %dx%d (%zu bytes)", frame->width, frame->height,
+				  new_buffer_size);
 			sws_freeContext(new_sws_ctx);
 			av_frame_free(&frame);
 			pthread_mutex_unlock(&ctx->mutex);
@@ -981,17 +971,16 @@ static void moq_source_decode_frame(struct moq_source *ctx, int32_t frame_id)
 		ctx->frame.linesize[0] = frame->width * 4;
 		ctx->frame.data[0] = new_frame_buffer;
 
-		LOG_INFO("Scaler initialized for %dx%d pix_fmt=%s",
-		         frame->width, frame->height,
-		         av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
+		LOG_INFO("Scaler initialized for %dx%d pix_fmt=%s", frame->width, frame->height,
+			 av_get_pix_fmt_name(decoded_pix_fmt) ? av_get_pix_fmt_name(decoded_pix_fmt) : "unknown");
 	}
 
 	// Convert YUV420P to RGBA
 	uint8_t *dst_data[4] = {ctx->frame_buffer, NULL, NULL, NULL};
 	int dst_linesize[4] = {static_cast<int>(ctx->frame.width * 4), 0, 0, 0};
 
-	sws_scale(ctx->sws_ctx, (const uint8_t *const *)frame->data, frame->linesize,
-	          0, ctx->frame.height, dst_data, dst_linesize);
+	sws_scale(ctx->sws_ctx, (const uint8_t *const *)frame->data, frame->linesize, 0, ctx->frame.height, dst_data,
+		  dst_linesize);
 
 	// Update OBS frame timestamp and output
 	ctx->frame.timestamp = frame_data.timestamp_us;

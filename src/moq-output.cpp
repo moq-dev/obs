@@ -81,7 +81,8 @@ bool MoQOutput::Start()
 
 		if (error_code == 0) {
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
-			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+			self->connect_time_ms = static_cast<int>(
+				std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms,
 				 self->server_url.c_str());
 		} else {

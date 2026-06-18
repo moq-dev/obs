@@ -1,27 +1,51 @@
 name: Pull Request
-run-name: ${{ github.event.pull_request.title }} pull request run 🚀
 on:
-  workflow_dispatch:
   pull_request:
-    paths-ignore:
-      - '**.md'
     branches: [master, main]
-    types: [ opened, synchronize, reopened ]
 permissions:
   contents: read
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: pr-${{ github.event.number }}
   cancel-in-progress: true
 jobs:
-  check-format:
-    name: Check Formatting 🔍
-    uses: ./.github/workflows/check-format.yaml
-    permissions:
-      contents: read
+  check:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop --command just check
 
-  build-project:
-    name: Build Project 🧱
-    uses: ./.github/workflows/build-project.yaml
-    secrets: inherit
-    permissions:
-      contents: read
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop --command just setup
+      - run: nix develop --command just build
+
+  build-macos:
+    name: Build (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop --command just setup
+      - run: nix develop --command just build
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: choco install just pkgconfiglite ffmpeg-full -y
+      - name: Setup
+        shell: bash
+        run: |
+          export PKG_CONFIG_PATH="/c/ProgramData/chocolatey/lib/ffmpeg-full/tools/ffmpeg/lib/pkgconfig"
+          just setup
+      - name: Build
+        shell: bash
+        run: just build
