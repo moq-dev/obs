@@ -17,15 +17,15 @@ class QTimer;
 class MoQDock : public QWidget {
 	Q_OBJECT
 
-      public:
+public:
 	explicit MoQDock(QWidget *parent = nullptr);
 	~MoQDock() override;
 
-      private slots:
+private slots:
 	void ToggleStream();
 	void UpdateStats();
 
-      private:
+private:
 	void StartStream();
 	void StopStream();
 	void SetRunning(bool running);

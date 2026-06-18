@@ -50,9 +50,10 @@ endif()
 # WrapOpenGL), but recent macOS SDKs ship no linkable AGL binary -- it exists
 # only in the runtime dyld shared cache. Generate a stub whose install name
 # points at the real framework so the link succeeds; dyld resolves AGL at load.
-if((ENABLE_QT OR ENABLE_FRONTEND_API)
-   AND APPLE
-   AND NOT EXISTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/AGL.framework/Versions/A/AGL"
+if(
+  (ENABLE_QT OR ENABLE_FRONTEND_API)
+  AND APPLE
+  AND NOT EXISTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/AGL.framework/Versions/A/AGL"
 )
   set(_agl_stub_dir "${CMAKE_BINARY_DIR}/agl-stub")
   set(_agl_stub_lib "${_agl_stub_dir}/AGL.framework/AGL")
@@ -64,8 +65,8 @@ if((ENABLE_QT OR ENABLE_FRONTEND_API)
     endforeach()
     execute_process(
       COMMAND
-        xcrun clang -dynamiclib ${_agl_arch_flags} -install_name
-        /System/Library/Frameworks/AGL.framework/Versions/A/AGL -o "${_agl_stub_lib}" -x c /dev/null
+        xcrun clang -dynamiclib ${_agl_arch_flags} -install_name /System/Library/Frameworks/AGL.framework/Versions/A/AGL
+        -o "${_agl_stub_lib}" -x c /dev/null
       RESULT_VARIABLE _agl_stub_result
     )
     if(NOT _agl_stub_result EQUAL 0)

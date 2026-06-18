@@ -266,8 +266,8 @@ void MoQDock::StartStream()
 	OBSDataAutoRelease serviceSettings = obs_data_create();
 	obs_data_set_string(serviceSettings, "server", url.c_str());
 	obs_data_set_string(serviceSettings, "key", path.c_str());
-	service = OBSServiceAutoRelease(
-		obs_service_create("moq_service", "moq_dock_service", serviceSettings, nullptr));
+	service =
+		OBSServiceAutoRelease(obs_service_create("moq_service", "moq_dock_service", serviceSettings, nullptr));
 	if (!service) {
 		status->setText("Failed to create service");
 		return;
