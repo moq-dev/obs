@@ -185,6 +185,7 @@ bool MoQDock::CreateConfiguredEncoders()
 	const char *videoId = nullptr;
 	const char *audioId = nullptr;
 	int audioBitrate = 0;
+	size_t audioMixerIdx = 0;
 
 	if (advanced) {
 		videoId = config_get_string(config, "AdvOut", "Encoder");
@@ -203,6 +204,8 @@ bool MoQDock::CreateConfiguredEncoders()
 		int track = (int)config_get_int(config, "AdvOut", "TrackIndex");
 		if (track < 1)
 			track = 1;
+		// OBS config tracks are 1-based; libobs mixer indices are 0-based.
+		audioMixerIdx = (size_t)(track - 1);
 		char key[32];
 		snprintf(key, sizeof(key), "Track%dBitrate", track);
 		audioBitrate = (int)config_get_int(config, "AdvOut", key);
@@ -236,8 +239,8 @@ bool MoQDock::CreateConfiguredEncoders()
 
 	videoEncoder =
 		OBSEncoderAutoRelease(obs_video_encoder_create(videoId, "moq_dock_video", videoSettings, nullptr));
-	audioEncoder =
-		OBSEncoderAutoRelease(obs_audio_encoder_create(audioId, "moq_dock_audio", audioSettings, 0, nullptr));
+	audioEncoder = OBSEncoderAutoRelease(
+		obs_audio_encoder_create(audioId, "moq_dock_audio", audioSettings, audioMixerIdx, nullptr));
 	if (!videoEncoder || !audioEncoder) {
 		LOG_ERROR("Failed to create encoders (%s / %s)", videoId, audioId);
 		return false;
@@ -424,10 +427,11 @@ void MoQDock::OnOutputStopped(void *data, calldata_t *params)
 	QMetaObject::invokeMethod(
 		self,
 		[self, code]() {
-			if (code != OBS_OUTPUT_SUCCESS) {
-				self->status->setText(QString("Stopped (code %1)").arg(code));
-			}
+			// StopStream() resets the status to "Idle", so set the failure
+			// message afterwards or it would be immediately overwritten.
 			self->StopStream();
+			if (code != OBS_OUTPUT_SUCCESS)
+				self->status->setText(QString("Stopped (code %1)").arg(code));
 		},
 		Qt::QueuedConnection);
 }
