@@ -22,10 +22,7 @@ if(${BUILD_PLUGIN})
   # Linux there's no obs-deps; pkg-config finds the system ffmpeg.
   if(WIN32 OR APPLE)
     find_package(FFmpeg REQUIRED avcodec avutil swscale swresample)
-    target_link_libraries(
-      obs-moq
-      PRIVATE FFmpeg::avcodec FFmpeg::avutil FFmpeg::swscale FFmpeg::swresample
-    )
+    target_link_libraries(obs-moq PRIVATE FFmpeg::avcodec FFmpeg::avutil FFmpeg::swscale FFmpeg::swresample)
   else()
     include(FindPkgConfig)
     pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libswscale libswresample)
