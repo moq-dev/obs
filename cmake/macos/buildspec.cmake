@@ -22,10 +22,12 @@ function(_check_dependencies_macos)
 
   _check_dependencies()
 
+  # Best-effort: strip Gatekeeper quarantine from the downloaded deps. Not all
+  # files carry the attribute (and build outputs under .deps may be read-only),
+  # so a non-zero exit here is expected and must not abort configuration.
   execute_process(
     COMMAND "xattr" -r -d com.apple.quarantine "${dependencies_dir}"
     RESULT_VARIABLE result
-    COMMAND_ERROR_IS_FATAL ANY
   )
 
   list(APPEND CMAKE_FRAMEWORK_PATH "${dependencies_dir}/Frameworks")
