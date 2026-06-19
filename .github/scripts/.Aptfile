@@ -4,3 +4,10 @@ package 'git'
 package 'jq'
 package 'ninja-build', bin: 'ninja'
 package 'pkg-config'
+
+# FFmpeg dev libraries: the MoQ source decodes video with libav*, found via
+# pkg-config on Linux (macOS/Windows use the obs-deps bundle instead).
+package 'libavcodec-dev'
+package 'libavutil-dev'
+package 'libswscale-dev'
+package 'libswresample-dev'
