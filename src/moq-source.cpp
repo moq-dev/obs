@@ -66,6 +66,13 @@ struct moq_source {
 	// Shutdown flag - set when destroy begins, callbacks should exit early
 	std::atomic<bool> shutting_down;
 
+	// In-flight async callback tracking. Each top-level MoQ callback holds a
+	// callback_guard for its lifetime, incrementing active_callbacks on entry
+	// and signaling callbacks_done when the count returns to zero. destroy waits
+	// on this for real quiescence before freeing ctx (no timing guesswork).
+	int active_callbacks;          // guarded by mutex
+	pthread_cond_t callbacks_done; // signaled when active_callbacks hits 0
+
 	// Session handles (all negative = invalid)
 	std::atomic<uint32_t> generation; // Increments on reconnect
 	bool reconnect_in_progress;       // True while reconnect is happening
@@ -91,6 +98,43 @@ struct moq_source {
 	// Threading
 	pthread_mutex_t mutex;
 };
+
+// RAII guard that tracks an in-flight async MoQ callback. Constructing it
+// registers the callback (unless we are already shutting down); destruction
+// unregisters it and wakes moq_source_destroy if it was the last one. This
+// gives destroy a real synchronization point instead of a fixed sleep: ctx is
+// never freed while a callback frame that may touch it is still on the stack.
+namespace {
+struct callback_guard {
+	struct moq_source *ctx;
+	bool active;
+
+	explicit callback_guard(struct moq_source *c) : ctx(c)
+	{
+		pthread_mutex_lock(&ctx->mutex);
+		active = !ctx->shutting_down.load();
+		if (active)
+			ctx->active_callbacks++;
+		pthread_mutex_unlock(&ctx->mutex);
+	}
+
+	~callback_guard()
+	{
+		if (!active)
+			return;
+		pthread_mutex_lock(&ctx->mutex);
+		if (--ctx->active_callbacks == 0)
+			pthread_cond_broadcast(&ctx->callbacks_done);
+		pthread_mutex_unlock(&ctx->mutex);
+	}
+
+	callback_guard(const callback_guard &) = delete;
+	callback_guard &operator=(const callback_guard &) = delete;
+
+	// True if the callback may proceed (i.e. shutdown had not begun on entry).
+	bool entered() const { return active; }
+};
+} // namespace
 
 // Forward declarations
 static void moq_source_update(void *data, obs_data_t *settings);
@@ -118,6 +162,10 @@ static void *moq_source_create(obs_data_t *settings, obs_source_t *source)
 
 	// Initialize shutdown flag
 	ctx->shutting_down = false;
+
+	// Initialize in-flight callback tracking
+	ctx->active_callbacks = 0;
+	pthread_cond_init(&ctx->callbacks_done, NULL);
 
 	// Initialize handles to invalid values
 	ctx->generation = 0;
@@ -158,32 +206,28 @@ static void moq_source_destroy(void *data)
 {
 	struct moq_source *ctx = (struct moq_source *)data;
 
-	// Set shutdown flag first - callbacks will check this and exit early
+	// Set shutdown flag first, then disconnect, then wait for any in-flight
+	// async callbacks to finish - all under the mutex so the handoff is atomic.
 	pthread_mutex_lock(&ctx->mutex);
 	ctx->shutting_down = true;
 	moq_source_disconnect_locked(ctx);
-	pthread_mutex_unlock(&ctx->mutex);
 
-	// Give MoQ callbacks time to drain - they check shutting_down and exit early.
-	// This prevents use-after-free when async callbacks fire after ctx is freed.
-	//
-	// LIMITATION: This 100ms sleep is a timing-based workaround, not a synchronization
-	// guarantee. If a callback is mid-execution when shutting_down is set AND takes
-	// longer than 100ms to complete (after the mutex unlock), there is still a
-	// potential race condition. In practice, our callbacks are fast (< 1ms typically)
-	// and this delay provides sufficient margin. However, a more robust solution
-	// would use reference counting:
-	//   - Increment refcount when entering a callback
-	//   - Decrement when exiting
-	//   - Wait for refcount to reach zero before freeing ctx
-	// This could be implemented using std::shared_ptr or a manual atomic refcount
-	// with a condition variable for waiting.
-	os_sleep_ms(100);
+	// Wait for true quiescence rather than sleeping a fixed interval. Any
+	// callback that entered before shutting_down was set has incremented
+	// active_callbacks (via callback_guard) and will broadcast callbacks_done
+	// when it unwinds. Callbacks arriving after this point observe shutting_down
+	// under the mutex and never increment. This eliminates the use-after-free
+	// window that a timed sleep could not close (e.g. a decode callback running
+	// FFmpeg longer than the old 100ms budget).
+	while (ctx->active_callbacks > 0)
+		pthread_cond_wait(&ctx->callbacks_done, &ctx->mutex);
+	pthread_mutex_unlock(&ctx->mutex);
 
 	bfree(ctx->url);
 	bfree(ctx->broadcast);
 	// Note: frame_buffer is already freed by moq_source_disconnect_locked
 
+	pthread_cond_destroy(&ctx->callbacks_done);
 	pthread_mutex_destroy(&ctx->mutex);
 
 	bfree(ctx);
@@ -257,14 +301,16 @@ static void on_session_status(void *user_data, int32_t code)
 {
 	struct moq_source *ctx = (struct moq_source *)user_data;
 
-	// Fast path: check atomic flag before taking lock
-	if (ctx->shutting_down.load()) {
+	// Register this callback for the duration of its execution. If shutdown has
+	// begun, entered() is false and we must not touch ctx.
+	callback_guard guard(ctx);
+	if (!guard.entered()) {
 		LOG_DEBUG("Ignoring session status callback - shutting down");
 		return;
 	}
 
 	pthread_mutex_lock(&ctx->mutex);
-	// Double-check after acquiring lock (may have changed)
+	// Double-check after acquiring lock (shutdown may have begun mid-callback)
 	if (ctx->shutting_down.load()) {
 		pthread_mutex_unlock(&ctx->mutex);
 		return;
@@ -307,8 +353,9 @@ static void on_catalog(void *user_data, int32_t catalog)
 
 	LOG_INFO("Catalog callback received: %d", catalog);
 
-	// Fast path: check atomic flag before taking lock
-	if (ctx->shutting_down.load()) {
+	// Register this callback for the duration of its execution.
+	callback_guard guard(ctx);
+	if (!guard.entered()) {
 		LOG_DEBUG("Ignoring catalog callback - shutting down");
 		if (catalog >= 0)
 			moq_consume_catalog_close(catalog);
@@ -317,7 +364,7 @@ static void on_catalog(void *user_data, int32_t catalog)
 
 	pthread_mutex_lock(&ctx->mutex);
 
-	// Double-check after acquiring lock (may have changed)
+	// Double-check after acquiring lock (shutdown may have begun mid-callback)
 	if (ctx->shutting_down.load()) {
 		pthread_mutex_unlock(&ctx->mutex);
 		if (catalog >= 0)
@@ -393,8 +440,10 @@ static void on_video_frame(void *user_data, int32_t frame_id)
 		return;
 	}
 
-	// Fast path: check atomic flag before taking lock
-	if (ctx->shutting_down.load()) {
+	// Register this callback for the duration of its execution (which includes
+	// the FFmpeg decode in moq_source_decode_frame).
+	callback_guard guard(ctx);
+	if (!guard.entered()) {
 		moq_consume_frame_close(frame_id);
 		return;
 	}
@@ -403,7 +452,7 @@ static void on_video_frame(void *user_data, int32_t frame_id)
 	// Note: We can't check video_track here because frames may arrive before
 	// the track handle is stored in on_catalog (race condition)
 	pthread_mutex_lock(&ctx->mutex);
-	// Double-check after acquiring lock (may have changed)
+	// Double-check after acquiring lock (shutdown may have begun mid-callback)
 	if (ctx->shutting_down.load()) {
 		pthread_mutex_unlock(&ctx->mutex);
 		moq_consume_frame_close(frame_id);
@@ -446,8 +495,13 @@ static void moq_source_reconnect(struct moq_source *ctx)
 	// Blank video while reconnecting to avoid showing stale frames
 	moq_source_blank_video(ctx);
 
-	// Small delay to allow MoQ library to fully clean up previous connection
-	os_sleep_ms(50);
+	// No delay needed before reconnecting: libmoq origins and sessions are fully
+	// independent (each origin is a distinct random instance, each session its own
+	// task), so the new connection shares no client-side state with the one we just
+	// closed. moq_origin_close removes the origin synchronously, and moq_session_close
+	// only signals the old session's task to wind down asynchronously on the libmoq
+	// runtime thread - nothing the new origin/session can collide with. (The previous
+	// os_sleep_ms(50) here was a timing band-aid that provided no real guarantee.)
 
 	// Create origin for consuming (outside mutex since it may block)
 	int32_t new_origin = moq_origin_create();
