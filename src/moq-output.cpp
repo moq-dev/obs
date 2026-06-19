@@ -75,17 +75,20 @@ bool MoQOutput::Start()
 
 	connect_start = std::chrono::steady_clock::now();
 
-	// Create a callback to log when the session is connected or closed
-	auto session_connect_callback = [](void *user_data, int error_code) {
+	// Create a callback to log when the session is connected or closed.
+	// libmoq status codes (>= 0.3.0): > 0 = (re)connected (epoch), 0 = closed
+	// cleanly (terminal), < 0 = fatal/reconnect-gave-up (terminal).
+	auto session_connect_callback = [](void *user_data, int code) {
 		auto self = static_cast<MoQOutput *>(user_data);
 
-		if (error_code == 0) {
+		if (code > 0) {
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
-			self->connect_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-			LOG_INFO("MoQ session established (%d ms): %s", self->connect_time_ms,
+			self->connect_time_ms = static_cast<int>(
+				std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+			LOG_INFO("MoQ session connected (%d ms, epoch %d): %s", self->connect_time_ms, code,
 				 self->server_url.c_str());
 		} else {
-			LOG_INFO("MoQ session closed (%d): %s", error_code, self->server_url.c_str());
+			LOG_INFO("MoQ session closed (%d): %s", code, self->server_url.c_str());
 		}
 	};
 

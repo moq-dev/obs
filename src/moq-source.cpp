@@ -322,16 +322,30 @@ static void on_session_status(void *user_data, int32_t code)
 	}
 	uint32_t current_gen = ctx->generation;
 
-	if (code == 0) {
+	// libmoq status codes (>= 0.3.0):
+	//   > 0 : (re)connected, carrying the connection epoch (1 = first connect,
+	//         2 = first reconnect, ...). The session auto-reconnects internally.
+	//   = 0 : closed cleanly via moq_session_close (terminal) - we initiated it.
+	//   < 0 : reconnect permanently gave up or fatal error (terminal).
+	if (code > 0) {
 		pthread_mutex_unlock(&ctx->mutex);
-		LOG_INFO("MoQ session connected successfully (generation %u)", current_gen);
-		// Now that we're connected, start consuming the broadcast
-		moq_source_start_consume(ctx, current_gen);
+		LOG_INFO("MoQ session connected (generation %u, epoch %d)", current_gen, code);
+		// Start consuming only on the first connect. On later epochs libmoq has
+		// re-subscribed our existing consumer automatically (the origin outlives
+		// the connection), so recreating it would leak handles.
+		if (code == 1) {
+			moq_source_start_consume(ctx, current_gen);
+		}
+	} else if (code == 0) {
+		// Clean close - we asked for this (disconnect/reconnect/destroy). The
+		// handle is already being torn down; nothing to do here.
+		pthread_mutex_unlock(&ctx->mutex);
+		LOG_DEBUG("MoQ session closed cleanly (generation %u)", current_gen);
 	} else {
-		// Connection failed - clean up the session and origin immediately
-		LOG_ERROR("MoQ session failed with code: %d (generation %u)", code, current_gen);
+		// Terminal error (e.g. auth failure, or reconnect gave up).
+		LOG_ERROR("MoQ session error: %d (generation %u)", code, current_gen);
 
-		// Clean up failed session/origin to prevent further callbacks
+		// Clean up the failed session/origin to prevent further callbacks.
 		if (ctx->session >= 0) {
 			moq_session_close(ctx->session);
 			ctx->session = -1;
