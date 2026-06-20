@@ -51,6 +51,10 @@ runs:
         if (( ${+RUNNER_DEBUG} )) setopt XTRACE
 
         print ::group::Install clang-format-19
+        # Homebrew now refuses to run executables from an untrusted tap, so
+        # explicitly trust obsproject/tools before installing clang-format from it.
+        brew tap obsproject/tools
+        brew trust obsproject/tools
         brew install --quiet obsproject/tools/clang-format@19
         print ::endgroup::
 
