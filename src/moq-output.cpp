@@ -15,7 +15,8 @@ MoQOutput::MoQOutput(obs_data_t *, obs_output_t *output)
 	  connect_time_ms(0),
 	  origin(moq_origin_create()),
 	  session(0),
-	  broadcast(moq_publish_create())
+	  broadcast(moq_publish_create()),
+	  outstanding_sessions(0)
 {
 }
 
@@ -25,6 +26,14 @@ MoQOutput::~MoQOutput()
 	moq_origin_close(origin);
 
 	Stop();
+
+	// Wait for any outstanding session terminal callback to fire before `this`
+	// is freed, so a late callback on the libmoq runtime thread can't touch freed
+	// memory. Bounded so a missing terminal degrades to a warning, not a hang.
+	std::unique_lock<std::mutex> lock(session_mutex);
+	if (!session_cv.wait_for(lock, std::chrono::seconds(2), [this] { return outstanding_sessions == 0; }))
+		LOG_WARNING("Output teardown timed out with %d MoQ session callback(s) outstanding",
+			    outstanding_sessions);
 }
 
 bool MoQOutput::Start()
@@ -85,18 +94,36 @@ bool MoQOutput::Start()
 			auto elapsed = std::chrono::steady_clock::now() - self->connect_start;
 			self->connect_time_ms = static_cast<int>(
 				std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-			LOG_INFO("MoQ session connected (%d ms, epoch %d): %s", self->connect_time_ms, code,
+			LOG_INFO("MoQ session connected (%d ms, epoch %d): %s", self->connect_time_ms.load(), code,
 				 self->server_url.c_str());
 		} else {
+			// Terminal callback (0 = clean close, < 0 = fatal): the session task
+			// has ended and will not touch `self` again. Release the lifetime
+			// reference the destructor waits on. This is the last access to `self`.
 			LOG_INFO("MoQ session closed (%d): %s", code, self->server_url.c_str());
+			std::lock_guard<std::mutex> lock(self->session_mutex);
+			if (--self->outstanding_sessions == 0)
+				self->session_cv.notify_all();
 		}
 	};
+
+	// Pre-account for the session subscription before handing `this` to libmoq:
+	// the connection can fail and fire its terminal callback before connect
+	// returns, and the destructor must wait for that callback.
+	{
+		std::lock_guard<std::mutex> lock(session_mutex);
+		outstanding_sessions++;
+	}
 
 	// Start establishing a session with the MoQ server
 	// NOTE: You could publish the same broadcasts to multiple sessions if you want (redundant ingest).
 	session = moq_session_connect(server_url.data(), server_url.size(), origin, 0, session_connect_callback, this);
 	if (session < 0) {
 		LOG_ERROR("Failed to initialize MoQ server: %d", session);
+		// No subscription was created, so no terminal will fire; undo the ref.
+		std::lock_guard<std::mutex> lock(session_mutex);
+		if (--outstanding_sessions == 0)
+			session_cv.notify_all();
 		return false;
 	}
 

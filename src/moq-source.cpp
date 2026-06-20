@@ -379,10 +379,15 @@ static void on_catalog(void *user_data, int32_t catalog)
 	subscription_ref ref(ctx, catalog <= 0);
 
 	if (catalog <= 0) {
-		if (catalog < 0)
+		if (catalog < 0) {
 			LOG_ERROR("Catalog subscription error: %d", catalog);
-		else
+			// Surface the failure (e.g. invalid broadcast) by blanking, as the
+			// old catalog-fetch-failed path did - but not during our own teardown.
+			if (!ctx->shutting_down.load())
+				moq_source_blank_video(ctx);
+		} else {
 			LOG_DEBUG("Catalog subscription closed cleanly");
+		}
 		return;
 	}
 
