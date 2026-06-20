@@ -5,6 +5,8 @@
 #include <util/dstr.h>
 
 #include <atomic>
+#include <errno.h>
+#include <time.h>
 
 #ifdef _WIN32
 #define strncasecmp _strnicmp
@@ -66,12 +68,16 @@ struct moq_source {
 	// Shutdown flag - set when destroy begins, callbacks should exit early
 	std::atomic<bool> shutting_down;
 
-	// In-flight async callback tracking. Each top-level MoQ callback holds a
-	// callback_guard for its lifetime, incrementing active_callbacks on entry
-	// and signaling callbacks_done when the count returns to zero. destroy waits
-	// on this for real quiescence before freeing ctx (no timing guesswork).
-	int active_callbacks;          // guarded by mutex
-	pthread_cond_t callbacks_done; // signaled when active_callbacks hits 0
+	// Lifetime reference count, guarded by mutex. ctx must outlive every libmoq
+	// subscription that was handed `ctx` as user_data: each delivers exactly one
+	// terminal callback (status <= 0), the documented last touch of user_data
+	// (libmoq >= 0.3.0). We hold one reference for the OBS-owned source plus one
+	// per outstanding subscription (session, catalog, video track); a
+	// subscription's reference is released by its terminal callback (see
+	// subscription_ref). destroy drops the owner reference and waits for the
+	// count to reach zero before freeing.
+	int refs;
+	pthread_cond_t refs_zero; // signaled when refs reaches 0
 
 	// Session handles (all negative = invalid)
 	std::atomic<uint32_t> generation; // Increments on reconnect
@@ -99,40 +105,38 @@ struct moq_source {
 	pthread_mutex_t mutex;
 };
 
-// RAII guard that tracks an in-flight async MoQ callback. Constructing it
-// registers the callback (unless we are already shutting down); destruction
-// unregisters it and wakes moq_source_destroy if it was the last one. This
-// gives destroy a real synchronization point instead of a fixed sleep: ctx is
-// never freed while a callback frame that may touch it is still on the stack.
+// RAII helper that releases a subscription's lifetime reference when its async
+// callback returns. libmoq (>= 0.3.0) hands `ctx` to each subscription as
+// user_data and guarantees exactly one terminal callback (status code <= 0),
+// after which user_data is never touched again. Each callback constructs one of
+// these with `terminal` set on that terminal code; on scope exit it drops the
+// matching reference and wakes moq_source_destroy when the last one is gone.
+// Releasing on scope exit (not entry) keeps ctx valid for the whole callback
+// body, including a terminal callback that still reads ctx before returning.
+//
+// Because libmoq runs all callbacks on a single runtime thread, a subscription's
+// reference is held continuously from registration through its terminal
+// callback, so ctx is always valid on entry to any of its callbacks - no
+// shutting_down pre-check is needed for safety.
 namespace {
-struct callback_guard {
+struct subscription_ref {
 	struct moq_source *ctx;
-	bool active;
+	bool terminal;
 
-	explicit callback_guard(struct moq_source *c) : ctx(c)
-	{
-		pthread_mutex_lock(&ctx->mutex);
-		active = !ctx->shutting_down.load();
-		if (active)
-			ctx->active_callbacks++;
-		pthread_mutex_unlock(&ctx->mutex);
-	}
+	subscription_ref(struct moq_source *c, bool is_terminal) : ctx(c), terminal(is_terminal) {}
 
-	~callback_guard()
+	~subscription_ref()
 	{
-		if (!active)
+		if (!terminal)
 			return;
 		pthread_mutex_lock(&ctx->mutex);
-		if (--ctx->active_callbacks == 0)
-			pthread_cond_broadcast(&ctx->callbacks_done);
+		if (--ctx->refs == 0)
+			pthread_cond_broadcast(&ctx->refs_zero);
 		pthread_mutex_unlock(&ctx->mutex);
 	}
 
-	callback_guard(const callback_guard &) = delete;
-	callback_guard &operator=(const callback_guard &) = delete;
-
-	// True if the callback may proceed (i.e. shutdown had not begun on entry).
-	bool entered() const { return active; }
+	subscription_ref(const subscription_ref &) = delete;
+	subscription_ref &operator=(const subscription_ref &) = delete;
 };
 } // namespace
 
@@ -163,9 +167,10 @@ static void *moq_source_create(obs_data_t *settings, obs_source_t *source)
 	// Initialize shutdown flag
 	ctx->shutting_down = false;
 
-	// Initialize in-flight callback tracking
-	ctx->active_callbacks = 0;
-	pthread_cond_init(&ctx->callbacks_done, NULL);
+	// One lifetime reference for the OBS-owned source itself; each subscription
+	// adds its own while outstanding.
+	ctx->refs = 1;
+	pthread_cond_init(&ctx->refs_zero, NULL);
 
 	// Initialize handles to invalid values
 	ctx->generation = 0;
@@ -206,28 +211,40 @@ static void moq_source_destroy(void *data)
 {
 	struct moq_source *ctx = (struct moq_source *)data;
 
-	// Set shutdown flag first, then disconnect, then wait for any in-flight
-	// async callbacks to finish - all under the mutex so the handoff is atomic.
 	pthread_mutex_lock(&ctx->mutex);
 	ctx->shutting_down = true;
+
+	// Close every subscription. Each was handed `ctx` as user_data and now
+	// delivers its terminal callback, which releases the matching reference.
+	// Closing via the handle makes that terminal fire promptly (libmoq's close
+	// path wins over any pending update), so the wait below is real quiescence,
+	// not a timing guess.
 	moq_source_disconnect_locked(ctx);
 
-	// Wait for true quiescence rather than sleeping a fixed interval. Any
-	// callback that entered before shutting_down was set has incremented
-	// active_callbacks (via callback_guard) and will broadcast callbacks_done
-	// when it unwinds. Callbacks arriving after this point observe shutting_down
-	// under the mutex and never increment. This eliminates the use-after-free
-	// window that a timed sleep could not close (e.g. a decode callback running
-	// FFmpeg longer than the old 100ms budget).
-	while (ctx->active_callbacks > 0)
-		pthread_cond_wait(&ctx->callbacks_done, &ctx->mutex);
+	// Drop the owner reference, then wait for the outstanding subscriptions to
+	// deliver their terminal callbacks before freeing ctx. The generous bounded
+	// wait is a backstop against a subscription that never terminates (a libmoq
+	// bug or an unaccounted handle): far better to log and proceed than to hang
+	// OBS on source deletion. In normal operation the terminals arrive within
+	// milliseconds and the timeout is never reached.
+	if (--ctx->refs > 0) {
+		struct timespec deadline;
+		timespec_get(&deadline, TIME_UTC);
+		deadline.tv_sec += 2;
+		while (ctx->refs > 0) {
+			if (pthread_cond_timedwait(&ctx->refs_zero, &ctx->mutex, &deadline) == ETIMEDOUT) {
+				LOG_WARNING("Teardown timed out with %d MoQ callback(s) still outstanding", ctx->refs);
+				break;
+			}
+		}
+	}
 	pthread_mutex_unlock(&ctx->mutex);
 
 	bfree(ctx->url);
 	bfree(ctx->broadcast);
 	// Note: frame_buffer is already freed by moq_source_disconnect_locked
 
-	pthread_cond_destroy(&ctx->callbacks_done);
+	pthread_cond_destroy(&ctx->refs_zero);
 	pthread_mutex_destroy(&ctx->mutex);
 
 	bfree(ctx);
@@ -301,17 +318,15 @@ static void on_session_status(void *user_data, int32_t code)
 {
 	struct moq_source *ctx = (struct moq_source *)user_data;
 
-	// Register this callback for the duration of its execution. If shutdown has
-	// begun, entered() is false and we must not touch ctx.
-	callback_guard guard(ctx);
-	if (!guard.entered()) {
-		LOG_DEBUG("Ignoring session status callback - shutting down");
-		return;
-	}
+	// Hold this session subscription's reference for the callback's lifetime. A
+	// terminal status (<= 0) means the session task has ended and will not touch
+	// ctx again, so the reference is released when `ref` goes out of scope.
+	subscription_ref ref(ctx, code <= 0);
 
 	pthread_mutex_lock(&ctx->mutex);
-	// Double-check after acquiring lock (shutdown may have begun mid-callback)
 	if (ctx->shutting_down.load()) {
+		// Teardown in progress; nothing to do (a terminal callback still
+		// releases its reference via `ref`).
 		pthread_mutex_unlock(&ctx->mutex);
 		return;
 	}
@@ -342,18 +357,12 @@ static void on_session_status(void *user_data, int32_t code)
 		pthread_mutex_unlock(&ctx->mutex);
 		LOG_DEBUG("MoQ session closed cleanly (generation %u)", current_gen);
 	} else {
-		// Terminal error (e.g. auth failure, or reconnect gave up).
+		// Terminal error (e.g. auth failure, or reconnect gave up). Tear down
+		// every subscription, not just the session, so the catalog/video
+		// subscriptions also fire their terminal callbacks and release their
+		// references promptly instead of lingering until the source is destroyed.
 		LOG_ERROR("MoQ session error: %d (generation %u)", code, current_gen);
-
-		// Clean up the failed session/origin to prevent further callbacks.
-		if (ctx->session >= 0) {
-			moq_session_close(ctx->session);
-			ctx->session = -1;
-		}
-		if (ctx->origin >= 0) {
-			moq_origin_close(ctx->origin);
-			ctx->origin = -1;
-		}
+		moq_source_disconnect_locked(ctx);
 		pthread_mutex_unlock(&ctx->mutex);
 
 		// Blank the video to show error state
@@ -365,115 +374,113 @@ static void on_catalog(void *user_data, int32_t catalog)
 {
 	struct moq_source *ctx = (struct moq_source *)user_data;
 
+	// Hold the catalog subscription's reference for the callback's lifetime;
+	// release it when this is the terminal callback (catalog <= 0).
+	subscription_ref ref(ctx, catalog <= 0);
+
+	if (catalog <= 0) {
+		if (catalog < 0)
+			LOG_ERROR("Catalog subscription error: %d", catalog);
+		else
+			LOG_DEBUG("Catalog subscription closed cleanly");
+		return;
+	}
+
 	LOG_INFO("Catalog callback received: %d", catalog);
 
-	// Register this callback for the duration of its execution.
-	callback_guard guard(ctx);
-	if (!guard.entered()) {
-		LOG_DEBUG("Ignoring catalog callback - shutting down");
-		if (catalog >= 0)
-			moq_consume_catalog_close(catalog);
-		return;
-	}
-
+	// `catalog` is a catalog *snapshot* id (a different slab from the
+	// subscription handle stored in ctx->catalog_handle). It must be freed with
+	// moq_consume_catalog_free on every path below - never closed.
 	pthread_mutex_lock(&ctx->mutex);
-
-	// Double-check after acquiring lock (shutdown may have begun mid-callback)
-	if (ctx->shutting_down.load()) {
-		pthread_mutex_unlock(&ctx->mutex);
-		if (catalog >= 0)
-			moq_consume_catalog_close(catalog);
-		return;
-	}
-
-	// Check if this callback is still valid (not from a stale connection)
+	bool stale = ctx->shutting_down.load() || ctx->consume < 0;
 	uint32_t current_gen = ctx->generation;
-	if (ctx->consume < 0) {
-		// We've been disconnected, ignore this callback
-		pthread_mutex_unlock(&ctx->mutex);
-		if (catalog >= 0)
-			moq_consume_catalog_close(catalog);
-		return;
-	}
-
 	pthread_mutex_unlock(&ctx->mutex);
-
-	if (catalog < 0) {
-		LOG_ERROR("Failed to get catalog: %d", catalog);
-		// Catalog failed (likely invalid broadcast) - blank video
-		moq_source_blank_video(ctx);
+	if (stale) {
+		// Disconnected or shutting down; ignore this snapshot.
+		moq_consume_catalog_free(catalog);
 		return;
 	}
 
-	// Get video configuration
+	// Get video configuration from the snapshot.
 	struct moq_video_config video_config;
 	if (moq_consume_video_config(catalog, 0, &video_config) < 0) {
 		LOG_ERROR("Failed to get video config");
-		moq_consume_catalog_close(catalog);
+		moq_consume_catalog_free(catalog);
 		return;
 	}
 
-	// Initialize decoder with the video config (takes mutex internally)
+	// Initialize decoder with the video config (takes mutex internally, and
+	// copies the codec/description out of the snapshot).
 	if (!moq_source_init_decoder(ctx, &video_config)) {
 		LOG_ERROR("Failed to initialize decoder");
-		moq_consume_catalog_close(catalog);
+		moq_consume_catalog_free(catalog);
 		return;
 	}
 
-	// Subscribe to video track with minimal buffering
-	// Note: moq_consume_video_ordered takes the catalog handle, not the consume handle
-	int32_t track = moq_consume_video_ordered(catalog, 0, 0, on_video_frame, ctx);
-	if (track < 0) {
-		LOG_ERROR("Failed to subscribe to video track: %d", track);
-		moq_consume_catalog_close(catalog);
-		return;
-	}
-
+	// Pre-account for the video track subscription before handing ctx to libmoq,
+	// so its reference is in place the instant the subscription exists. Undone
+	// below only if creation fails.
 	pthread_mutex_lock(&ctx->mutex);
-	if (ctx->generation == current_gen) {
-		ctx->video_track = track;
-		ctx->catalog_handle = catalog;
-	} else {
-		// Generation changed while we were setting up, clean up the track
-		pthread_mutex_unlock(&ctx->mutex);
-		moq_consume_video_close(track);
-		moq_consume_catalog_close(catalog);
-		return;
-	}
+	ctx->refs++;
 	pthread_mutex_unlock(&ctx->mutex);
 
-	LOG_INFO("Subscribed to video track successfully");
+	// Subscribe to the video track (index 0). This takes the catalog snapshot,
+	// not the consume handle, and does not retain it - so free the snapshot
+	// immediately after.
+	int32_t track = moq_consume_video_ordered(catalog, 0, 0, on_video_frame, ctx);
+	moq_consume_catalog_free(catalog);
+	if (track < 0) {
+		LOG_ERROR("Failed to subscribe to video track: %d", track);
+		pthread_mutex_lock(&ctx->mutex);
+		// No subscription was created, so no terminal will fire; undo the ref.
+		if (--ctx->refs == 0)
+			pthread_cond_broadcast(&ctx->refs_zero);
+		pthread_mutex_unlock(&ctx->mutex);
+		return;
+	}
+
+	// The video track subscription now exists and will deliver a terminal
+	// on_video_frame (<= 0) that releases the reference added above - even on the
+	// cleanup path below.
+	pthread_mutex_lock(&ctx->mutex);
+	if (ctx->generation == current_gen && !ctx->shutting_down.load()) {
+		// A catalog update can arrive while a track is already subscribed; close
+		// the previous one so its terminal callback releases its reference (else
+		// it would linger until teardown's bounded wait).
+		int32_t old_track = ctx->video_track;
+		ctx->video_track = track;
+		pthread_mutex_unlock(&ctx->mutex);
+		if (old_track >= 0)
+			moq_consume_video_close(old_track);
+		LOG_INFO("Subscribed to video track successfully");
+	} else {
+		// Stale or shutting down: close the track we just created; its terminal
+		// callback releases the reference added above.
+		pthread_mutex_unlock(&ctx->mutex);
+		moq_consume_video_close(track);
+	}
 }
 
 static void on_video_frame(void *user_data, int32_t frame_id)
 {
 	struct moq_source *ctx = (struct moq_source *)user_data;
 
-	if (frame_id < 0) {
-		LOG_ERROR("Video frame callback with error: %d", frame_id);
+	// Hold the video track subscription's reference for the callback's lifetime
+	// (which includes the FFmpeg decode in moq_source_decode_frame); release it
+	// on the terminal callback (frame_id <= 0).
+	subscription_ref ref(ctx, frame_id <= 0);
+
+	if (frame_id <= 0) {
+		if (frame_id < 0)
+			LOG_ERROR("Video track error: %d", frame_id);
+		else
+			LOG_DEBUG("Video track closed cleanly");
 		return;
 	}
 
-	// Register this callback for the duration of its execution (which includes
-	// the FFmpeg decode in moq_source_decode_frame).
-	callback_guard guard(ctx);
-	if (!guard.entered()) {
-		moq_consume_frame_close(frame_id);
-		return;
-	}
-
-	// Check if this callback is still valid using generation (not video_track)
-	// Note: We can't check video_track here because frames may arrive before
-	// the track handle is stored in on_catalog (race condition)
 	pthread_mutex_lock(&ctx->mutex);
-	// Double-check after acquiring lock (shutdown may have begun mid-callback)
-	if (ctx->shutting_down.load()) {
-		pthread_mutex_unlock(&ctx->mutex);
-		moq_consume_frame_close(frame_id);
-		return;
-	}
-	if (ctx->consume < 0) {
-		// We've been disconnected, ignore this callback
+	if (ctx->shutting_down.load() || ctx->consume < 0) {
+		// Shutting down or disconnected: drop the frame.
 		pthread_mutex_unlock(&ctx->mutex);
 		moq_consume_frame_close(frame_id);
 		return;
@@ -488,6 +495,15 @@ static void moq_source_reconnect(struct moq_source *ctx)
 {
 	// Increment generation to invalidate old callbacks
 	pthread_mutex_lock(&ctx->mutex);
+
+	// Never start a new connection once teardown has begun: it would register a
+	// subscription after destroy already closed everything, leaking its
+	// reference until the bounded wait times out. (OBS serializes update/destroy
+	// so this is defense-in-depth.)
+	if (ctx->shutting_down.load()) {
+		pthread_mutex_unlock(&ctx->mutex);
+		return;
+	}
 
 	// Check if reconnect is already in progress
 	if (ctx->reconnect_in_progress) {
@@ -528,6 +544,14 @@ static void moq_source_reconnect(struct moq_source *ctx)
 		return;
 	}
 
+	// Pre-account for the session subscription before handing ctx to libmoq: the
+	// connection can fail and fire its terminal on_session_status from the
+	// runtime thread immediately, and that must not decrement the reference
+	// before we have added it.
+	pthread_mutex_lock(&ctx->mutex);
+	ctx->refs++;
+	pthread_mutex_unlock(&ctx->mutex);
+
 	// Connect to MoQ server (consume will happen in on_session_status callback)
 	int32_t new_session = moq_session_connect(url_copy, strlen(url_copy),
 						  0,          // origin_publish
@@ -539,6 +563,10 @@ static void moq_source_reconnect(struct moq_source *ctx)
 		LOG_ERROR("Failed to connect to MoQ server: %d", new_session);
 		moq_origin_close(new_origin);
 		pthread_mutex_lock(&ctx->mutex);
+		// No session subscription was created, so no terminal will fire; undo
+		// the reference we pre-added above.
+		if (--ctx->refs == 0)
+			pthread_cond_broadcast(&ctx->refs_zero);
 		ctx->reconnect_in_progress = false;
 		pthread_mutex_unlock(&ctx->mutex);
 		return;
@@ -612,6 +640,13 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 	ctx->consume = consume;
 	pthread_mutex_unlock(&ctx->mutex);
 
+	// Pre-account for the catalog subscription before handing ctx to libmoq, so
+	// its reference is in place the instant the subscription exists (see the
+	// note on subscription_ref). Undone below only if creation fails.
+	pthread_mutex_lock(&ctx->mutex);
+	ctx->refs++;
+	pthread_mutex_unlock(&ctx->mutex);
+
 	// Subscribe to catalog updates
 	int32_t catalog_handle = moq_consume_catalog(consume, on_catalog, ctx);
 	if (catalog_handle < 0) {
@@ -619,6 +654,9 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 		bfree(broadcast_copy);
 		// Failed to get catalog - clean up
 		pthread_mutex_lock(&ctx->mutex);
+		// No subscription was created, so no terminal will fire; undo the ref.
+		if (--ctx->refs == 0)
+			pthread_cond_broadcast(&ctx->refs_zero);
 		if (ctx->generation == expected_gen) {
 			if (ctx->consume >= 0) {
 				moq_consume_close(ctx->consume);
@@ -638,11 +676,32 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 		return;
 	}
 
+	// The catalog subscription now exists and will deliver a terminal on_catalog
+	// (<= 0) that releases the reference added above. Store the subscription
+	// handle so disconnect can close it, which makes that terminal fire promptly.
+	// (This is the real subscription handle, distinct from the catalog snapshot
+	// ids delivered to on_catalog.)
+	pthread_mutex_lock(&ctx->mutex);
+	if (ctx->generation == expected_gen && !ctx->shutting_down.load()) {
+		ctx->catalog_handle = catalog_handle;
+		pthread_mutex_unlock(&ctx->mutex);
+	} else {
+		// Stale or shutting down: close it; its terminal releases the reference.
+		pthread_mutex_unlock(&ctx->mutex);
+		moq_consume_catalog_close(catalog_handle);
+	}
+
 	LOG_INFO("Consuming broadcast: %s", broadcast_copy);
 	bfree(broadcast_copy);
 }
 
-// NOTE: Caller must hold ctx->mutex when calling this function
+// NOTE: Caller must hold ctx->mutex when calling this function.
+//
+// The moq_*_close calls below only *signal* each subscription to wind down;
+// libmoq delivers the terminal callback asynchronously on its runtime thread,
+// never synchronously from within close(). That is what lets us close under the
+// mutex here without the terminal callback's subscription_ref re-entering the
+// mutex on this same thread (which would self-deadlock).
 static void moq_source_disconnect_locked(struct moq_source *ctx)
 {
 	if (ctx->video_track >= 0) {
