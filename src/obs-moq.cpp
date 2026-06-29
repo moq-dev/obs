@@ -32,6 +32,7 @@ extern "C" {
 
 #ifdef _WIN64
 #include <windows.h>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #endif
@@ -45,16 +46,22 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 bool obs_module_load(void)
 {
+	// On Windows, allocate a console when RUST_LOG=debug *before* initializing
+	// the Rust logger below, so its output binds to a valid stderr. AllocConsole
+	// sets the process std handles, but the C runtime streams must be reopened
+	// onto the console device for that output to be visible.
+#ifdef _WIN64
+	const char *logLevel = std::getenv("RUST_LOG");
+	if (logLevel && strcmp(logLevel, "debug") == 0) {
+		AllocConsole();
+		freopen("CONOUT$", "w", stdout);
+		freopen("CONOUT$", "w", stderr);
+	}
+#endif
+
 	// Use RUST_LOG env var for more verbose output
 	// The second argument is the string length of the first argument.
 	moq_log_level("info", 4);
-
-	// Enable a debug console in Windows if the RUST_LOG env var is set to debug.
-#ifdef _WIN64
-	const char *logLevel = std::getenv("RUST_LOG");
-	if (logLevel && strcmp(logLevel, "debug") == 0)
-		AllocConsole();
-#endif
 
 	register_moq_output();
 	register_moq_service();
