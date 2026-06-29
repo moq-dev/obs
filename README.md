@@ -35,8 +35,8 @@ Prerequisites:
     ```bash
     cd obs-studio
 
-    # Configure for Windows
-    cmake -G "Visual Studio 18 2026" -A x64 --preset windows-x64
+    # Configure for Windows (generator and architecture come from the preset)
+    cmake --preset windows-x64
     # Configure for macos
     cmake --preset macos
 
@@ -44,12 +44,7 @@ Prerequisites:
     cmake --build --preset windows-x64
 
     # Build for macOS
-    cd build_macos
-    xcodebuild  \
-    -configuration RelWithDebInfo \
-    -scheme obs-studio \
-    -parallelizeTargets \
-    -destination "generic/platform=macOS,name=Any Mac"
+    cmake --build --preset macos
     ```
 
 3.  Configure the plugin:
