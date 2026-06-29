@@ -17,6 +17,7 @@
 #include <QMetaObject>
 
 #include <cstring>
+#include <random>
 #include <string>
 
 #ifndef MOQ_VERSION_STRING
@@ -71,16 +72,30 @@ std::string SettingsPath()
 	return s;
 }
 
+// Default broadcast name "obs-<rand>" so distinct setups don't collide on a
+// shared relay out of the box. Only used until the user edits/saves their own.
+std::string RandomBroadcastName()
+{
+	static const char charset[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	std::uniform_int_distribution<int> dist(0, (int)sizeof(charset) - 2);
+	std::string s = "obs-";
+	for (int i = 0; i < 6; i++)
+		s += charset[dist(gen)];
+	return s;
+}
+
 } // namespace
 
 MoQDock::MoQDock(QWidget *parent) : QWidget(parent)
 {
 	urlEdit = new QLineEdit(this);
-	urlEdit->setText("http://localhost:4443/anon");
-	urlEdit->setPlaceholderText("https://cdn.moq.dev/anon");
+	urlEdit->setText("https://cdn.moq.dev/anon");
+	urlEdit->setPlaceholderText("http://localhost:4443/anon");
 
 	pathEdit = new QLineEdit(this);
-	pathEdit->setText("obs");
+	pathEdit->setText(QString::fromStdString(RandomBroadcastName()));
 	pathEdit->setPlaceholderText("(optional) broadcast name");
 
 	// Labels above the fields (WrapAllRows), and let the fields grow to the full

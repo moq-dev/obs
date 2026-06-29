@@ -4,22 +4,24 @@
 
 ## Features
 
-*   **Protocol:** Media over QUIC (MoQ)
-*   **Video Codecs:** H.264, HEVC (H.265), AV1
-*   **Audio Codecs:** AAC, Opus
-*   **Low Latency:** Leverages QUIC for efficient and low-latency media transport.
+- **Protocol:** Media over QUIC (MoQ)
+- **Video Codecs:** H.264, HEVC (H.265), AV1
+- **Audio Codecs:** AAC, Opus
+- **Low Latency:** Leverages QUIC for efficient and low-latency media transport.
 
 ## Installation
 
 ### Setup
 
 Prerequisites:
-*   CMake 3.20+
-*   C++ Compiler (Clang/GCC/MSVC)
-*   OBS Studio development libraries (libobs)
-*   [Fork of OBS-Studio](https://github.com/brianmed/obs-studio) just to show MoQ in the UI.
+
+- CMake 3.20+
+- C++ Compiler (Clang/GCC/MSVC)
+- OBS Studio development libraries (libobs)
+- [Fork of OBS-Studio](https://github.com/brianmed/obs-studio) just to show MoQ in the UI.
 
 1.  Clone the repos:
+
     ```bash
     git clone https://github.com/moq-dev/obs.git moq-obs
     git clone https://github.com/brianmed/obs-studio.git obs-studio
@@ -28,16 +30,25 @@ Prerequisites:
     git clone https://github.com/moq-dev/moq.git moq
     ```
 
-2. Build the OBS fork:
+2.  Build the OBS fork:
+
     ```bash
     cd obs-studio
 
-    # Replace with your platform
+    # Configure for Windows (generator and architecture come from the preset)
+    cmake --preset windows-x64
+    # Configure for macos
     cmake --preset macos
+
+    # Build for Windows
+    cmake --build --preset windows-x64
+
+    # Build for macOS
     cmake --build --preset macos
     ```
 
 3.  Configure the plugin:
+
     ```bash
     cd moq-obs
 
@@ -50,11 +61,12 @@ Prerequisites:
 ### Build
 
 1.  Build the plugin:
+
     ```bash
     just build
     ```
 
-2. Copy the plugin to the OBS Studio plugins directory and run it:
+2.  Copy the plugin to the OBS Studio plugins directory and run it:
 
 ```bash
 # macOS only:
@@ -63,6 +75,7 @@ just run
 ```
 
 On linux you'll have to do:
+
 ```bash
 cp build_x86_64/obs-moq.so ~/.config/obs-studio/plugins/obs-moq/bin/64bit/obs-moq.so
 # TODO: add Linux command to `just run`
@@ -74,19 +87,19 @@ cp build_x86_64/obs-moq.so ~/.config/obs-studio/plugins/obs-moq/bin/64bit/obs-mo
 2.  Go to **Settings** > **Stream**.
 3.  In the **Service** dropdown, select **MoQ**.
 4.  Enter your MoQ Server details:
-    * For development (`just dev`): `http://localhost:4443/anon`.
-    * For testing: `https://cdn.moq.dev/anon`.
+    - For development (`just dev`): `http://localhost:4443/anon`.
+    - For testing: `https://cdn.moq.dev/anon`.
 5.  Enter the broadcast name/path:
-    * For testing: `obs` or some unique string.
-    * Watch it here: https://moq.dev/watch/?name=obs
-5.  Configure your Output settings (Codecs, Bitrate) as desired.
-    * Currently, only: `h264` and `aac` are supported.
-6.  Start Streaming!
-
+    - For testing: `obs` or some unique string.
+    - Watch it here: https://moq.dev/watch/?name=obs
+6.  Configure your Output settings (Codecs, Bitrate) as desired.
+    - Currently, only: `h264` and `aac` are supported.
+7.  Start Streaming!
 
 ## Manual MoQ Output Streaming Configuration
 
 For configuring via a file, prior to launching OBS you can add this to your OBS Profile directory (eg: "Untitled"):
+
 ```bash
 # Linux
 $ cat ~/.config/obs-studio/basic/profiles/Untitled/service.json
@@ -111,25 +124,22 @@ $ cat ~/Library/Application\ Support/obs-studio/basic/profiles/Untitled/service.
 1. Open OBS Studio
 2. Goto **Sources** > (right-click) **MoQ Source**
 3. Enter your MoQ Server details, eg:
-    * For development (`just dev`): `http://localhost:4443/anon`.
-4.  Enter the broadcast name/path:
-    * For development: `bbb`.
+   - For development (`just dev`): `http://localhost:4443/anon`.
+4. Enter the broadcast name/path:
+   - For development: `bbb`.
 5. Click **OK**
-
 
 ## Supported Build Environments
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | Xcode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
-
-
+| Platform       | Tool                  |
+| -------------- | --------------------- |
+| Windows        | Visual Studio 17 2022 |
+| macOS          | Xcode 16.0            |
+| Windows, macOS | CMake 3.30.5          |
+| Ubuntu 24.04   | CMake 3.28.3          |
+| Ubuntu 24.04   | `ninja-build`         |
+| Ubuntu 24.04   | `pkg-config`          |
+| Ubuntu 24.04   | `build-essential`     |
 
 ## License
 
