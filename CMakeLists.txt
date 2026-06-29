@@ -55,6 +55,19 @@ else()
   target_link_libraries(obs-moq PRIVATE moq::moq)
 endif()
 
+# libmoq is a Rust static library; its std runtime pulls in symbols from Windows
+# system libraries (e.g. NtCreateNamedPipeFile from ntdll) that MSVC does not
+# auto-resolve when the archive is linked into this module. These are the OS
+# import libraries reported by `rustc --print native-static-libs` that aren't
+# linked by default; they resolve by name from the Windows SDK (no hard-coded
+# paths). The libmoq package config also declares these, but linking them here
+# keeps the plugin buildable against any libmoq (local dev tree or prebuilt
+# release) whose config may predate that declaration. Duplicate links are
+# harmless.
+if(WIN32)
+  target_link_libraries(obs-moq PRIVATE ntdll userenv ws2_32 dbghelp bcrypt)
+endif()
+
 # The obs-deps Qt6 build references the AGL framework transitively (via
 # WrapOpenGL), but recent macOS SDKs ship no linkable AGL binary -- it exists
 # only in the runtime dyld shared cache. Generate a stub whose install name
