@@ -38,13 +38,8 @@ void MoQService::ApplyEncoderSettings(obs_data_t *video_settings, obs_data_t *au
 
 	// Example:
     if (video_settings) {
-        obs_data_set_int(video_settings, "bf", 0);
         obs_data_set_bool(video_settings, "repeat_headers", true);
     }
-
-	if (audio_settings) {
-		obs_data_set_int(audio_settings, "bf", 0);
-	}
 }
 
 const char *MoQService::GetConnectInfo(enum obs_service_connect_info type)
