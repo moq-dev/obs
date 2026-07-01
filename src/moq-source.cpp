@@ -279,8 +279,9 @@ static std::string redact_url(const char *url)
 	size_t auth_end = s.find_first_of("/?#", rest);
 	std::string authority = s.substr(rest, auth_end == std::string::npos ? std::string::npos : auth_end - rest);
 
-	// Drop any userinfo (user:pass@).
-	size_t at = authority.find('@');
+	// Drop any userinfo (user:pass@). Use the last '@' so an unescaped '@' in a
+	// password can't leave part of it behind.
+	size_t at = authority.rfind('@');
 	if (at != std::string::npos)
 		authority = authority.substr(at + 1);
 
