@@ -86,6 +86,7 @@ struct moq_source {
 	int32_t origin;
 	int32_t session;
 	int32_t consume;
+	int32_t consume_announced_task; // Wait handle from moq_origin_consume_announced
 	int32_t catalog_handle;
 	int32_t video_track;
 
@@ -149,6 +150,7 @@ static void moq_source_get_defaults(obs_data_t *settings);
 
 // MoQ callbacks
 static void on_session_status(void *user_data, int32_t code);
+static void on_broadcast_ready(void *user_data, int32_t broadcast);
 static void on_catalog(void *user_data, int32_t catalog);
 static void on_video_frame(void *user_data, int32_t frame_id);
 
@@ -179,6 +181,7 @@ static void *moq_source_create(obs_data_t *settings, obs_source_t *source)
 	ctx->origin = -1;
 	ctx->session = -1;
 	ctx->consume = -1;
+	ctx->consume_announced_task = -1;
 	ctx->catalog_handle = -1;
 	ctx->video_track = -1;
 
@@ -649,13 +652,28 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 	char *broadcast_copy = bstrdup(ctx->broadcast);
 	pthread_mutex_unlock(&ctx->mutex);
 
-	// Consume broadcast by path
-	int32_t consume = moq_origin_consume(origin, broadcast_copy, strlen(broadcast_copy));
-	if (consume < 0) {
-		LOG_ERROR("Failed to consume broadcast '%s': %d", broadcast_copy, consume);
+	// Pre-account for the consume-announced task before handing ctx to libmoq,
+	// so its reference is in place the instant the task exists (see the note on
+	// subscription_ref). Its terminal callback (broadcast <= 0 in
+	// on_broadcast_ready) releases it. Undone below only if the call fails
+	// immediately, since then no callback ever fires.
+	pthread_mutex_lock(&ctx->mutex);
+	ctx->refs++;
+	pthread_mutex_unlock(&ctx->mutex);
+
+	// Wait until the broadcast is announced, then consume it. A synchronous
+	// moq_origin_consume here races announcement gossip and usually returns
+	// BroadcastNotFound right after connecting; the announced variant delivers
+	// the handle via on_broadcast_ready once the announcement arrives.
+	int32_t task =
+		moq_origin_consume_announced(origin, broadcast_copy, strlen(broadcast_copy), on_broadcast_ready, ctx);
+	if (task < 0) {
+		LOG_ERROR("Failed to start consume for '%s': %d", broadcast_copy, task);
 		bfree(broadcast_copy);
-		// Failed to consume - clean up session/origin
 		pthread_mutex_lock(&ctx->mutex);
+		// No task was created, so no terminal callback fires; undo the ref.
+		if (--ctx->refs == 0)
+			pthread_cond_broadcast(&ctx->refs_zero);
 		if (ctx->generation == expected_gen) {
 			if (ctx->session >= 0) {
 				moq_session_close(ctx->session);
@@ -672,30 +690,69 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 	}
 
 	pthread_mutex_lock(&ctx->mutex);
-	// Verify generation hasn't changed while we were waiting
-	if (ctx->generation != expected_gen) {
+	if (ctx->generation == expected_gen && !ctx->shutting_down.load()) {
+		ctx->consume_announced_task = task;
 		pthread_mutex_unlock(&ctx->mutex);
-		LOG_INFO("Generation changed during consume setup, cleaning up");
-		moq_consume_close(consume);
-		bfree(broadcast_copy);
+	} else {
+		// Stale or shutting down: cancel the wait; its terminal callback releases
+		// the reference added above.
+		pthread_mutex_unlock(&ctx->mutex);
+		moq_origin_consume_announced_close(task);
+	}
+
+	LOG_INFO("Waiting for broadcast announcement: %s", broadcast_copy);
+	bfree(broadcast_copy);
+}
+
+// Delivers the broadcast once it has been announced. libmoq calls this with a
+// positive broadcast handle first, then a terminal code (0 when the wait ends
+// normally - which happens right after a successful handle, or after
+// cancellation - or a negative error). On the handle we set up the catalog
+// subscription exactly like the old synchronous consume path; the terminal only
+// clears the task handle, releases this task's reference, and reports errors.
+static void on_broadcast_ready(void *user_data, int32_t broadcast)
+{
+	struct moq_source *ctx = (struct moq_source *)user_data;
+
+	// Hold this task's reference for the callback's lifetime; release it on the
+	// terminal callback (broadcast <= 0).
+	subscription_ref ref(ctx, broadcast <= 0);
+
+	if (broadcast <= 0) {
+		pthread_mutex_lock(&ctx->mutex);
+		ctx->consume_announced_task = -1;
+		bool report_error = broadcast < 0 && !ctx->shutting_down.load();
+		pthread_mutex_unlock(&ctx->mutex);
+		if (broadcast < 0) {
+			LOG_ERROR("Failed to consume announced broadcast: %d", broadcast);
+			if (report_error)
+				moq_source_blank_video(ctx);
+		} else {
+			LOG_DEBUG("Broadcast wait finished");
+		}
 		return;
 	}
-	ctx->consume = consume;
-	pthread_mutex_unlock(&ctx->mutex);
 
-	// Pre-account for the catalog subscription before handing ctx to libmoq, so
-	// its reference is in place the instant the subscription exists (see the
-	// note on subscription_ref). Undone below only if creation fails.
+	// broadcast > 0: the announced broadcast handle. Proceed like the old
+	// synchronous consume path from here.
 	pthread_mutex_lock(&ctx->mutex);
+	uint32_t expected_gen = ctx->generation;
+	if (ctx->shutting_down.load() || ctx->origin < 0) {
+		pthread_mutex_unlock(&ctx->mutex);
+		LOG_INFO("Broadcast announced but source is tearing down; dropping handle");
+		moq_consume_close(broadcast);
+		return;
+	}
+	ctx->consume = broadcast;
+	// Pre-account for the catalog subscription before handing ctx to libmoq, so
+	// its reference is in place the instant the subscription exists.
 	ctx->refs++;
 	pthread_mutex_unlock(&ctx->mutex);
 
 	// Subscribe to catalog updates
-	int32_t catalog_handle = moq_consume_catalog(consume, on_catalog, ctx);
+	int32_t catalog_handle = moq_consume_catalog(broadcast, on_catalog, ctx);
 	if (catalog_handle < 0) {
-		LOG_ERROR("Failed to subscribe to catalog for '%s': %d", broadcast_copy, catalog_handle);
-		bfree(broadcast_copy);
-		// Failed to get catalog - clean up
+		LOG_ERROR("Failed to subscribe to catalog: %d", catalog_handle);
 		pthread_mutex_lock(&ctx->mutex);
 		// No subscription was created, so no terminal will fire; undo the ref.
 		if (--ctx->refs == 0)
@@ -720,10 +777,8 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 	}
 
 	// The catalog subscription now exists and will deliver a terminal on_catalog
-	// (<= 0) that releases the reference added above. Store the subscription
-	// handle so disconnect can close it, which makes that terminal fire promptly.
-	// (This is the real subscription handle, distinct from the catalog snapshot
-	// ids delivered to on_catalog.)
+	// (<= 0) that releases the reference added above. Store the handle so
+	// disconnect can close it, which makes that terminal fire promptly.
 	pthread_mutex_lock(&ctx->mutex);
 	if (ctx->generation == expected_gen && !ctx->shutting_down.load()) {
 		ctx->catalog_handle = catalog_handle;
@@ -734,8 +789,7 @@ static void moq_source_start_consume(struct moq_source *ctx, uint32_t expected_g
 		moq_consume_catalog_close(catalog_handle);
 	}
 
-	LOG_INFO("Consuming broadcast: %s", broadcast_copy);
-	bfree(broadcast_copy);
+	LOG_INFO("Consuming announced broadcast");
 }
 
 // NOTE: Caller must hold ctx->mutex when calling this function.
@@ -755,6 +809,11 @@ static void moq_source_disconnect_locked(struct moq_source *ctx)
 	if (ctx->catalog_handle >= 0) {
 		moq_consume_catalog_close(ctx->catalog_handle);
 		ctx->catalog_handle = -1;
+	}
+
+	if (ctx->consume_announced_task >= 0) {
+		moq_origin_consume_announced_close(ctx->consume_announced_task);
+		ctx->consume_announced_task = -1;
 	}
 
 	if (ctx->consume >= 0) {
