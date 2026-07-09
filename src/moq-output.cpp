@@ -166,6 +166,9 @@ void MoQOutput::Stop(bool signal)
 	}
 	audio_tracks.clear();
 
+	// Clear bytes sent
+	total_bytes_sent = 0;
+
 	if (signal) {
 		obs_output_signal_stop(output, OBS_OUTPUT_SUCCESS);
 	}
@@ -178,6 +181,11 @@ void MoQOutput::Data(struct encoder_packet *packet)
 	if (!packet) {
 		Stop(false);
 		obs_output_signal_stop(output, OBS_OUTPUT_ENCODE_ERROR);
+		return;
+	}
+
+	// OBS tries to gather data on signalling a stop success. Check once if the video tracks map is filled or new broadcasts fail on Windows.
+	if (video_tracks.empty()) {
 		return;
 	}
 
